@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
+	"crypto/tls"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,24 +15,31 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
-const version = "2.1.0"
+const version = "3.0.0"
 
 //go:embed web/*
 var webFS embed.FS
 
 type server struct {
-	dataDir      string
-	domain       string
-	passwordHash string
-	interval     time.Duration
-	mu           sync.RWMutex
-	syncing      bool
-	lastError    string
-	logs         []string
-	sessions     map[string]time.Time
+	dataDir       string
+	domain        string
+	authDisabled  bool
+	updaterURL    string
+	updaterToken  string
+	interval      time.Duration
+	scheduleReset chan time.Duration
+	mu            sync.RWMutex
+	syncing       bool
+	lastError     string
+	logs          []string
+}
+
+type persistedSettings struct {
+	IntervalSeconds int `json:"interval_seconds"`
 }
 
 type mirrorStatus struct {
@@ -51,27 +56,34 @@ func main() {
 	if intervalSeconds < 3600 {
 		intervalSeconds = 3600
 	}
-	s := &server{
-		dataDir:      env("DATA_DIR", "/data"),
-		domain:       env("MIRROR_DOMAIN", "rules.coralbay.top"),
-		passwordHash: strings.ToLower(os.Getenv("ADMIN_PASSWORD_SHA256")),
-		interval:     time.Duration(intervalSeconds) * time.Second,
-		sessions:     make(map[string]time.Time),
+	dataDir := env("DATA_DIR", "/data")
+	if content, err := os.ReadFile(filepath.Join(dataDir, "settings.json")); err == nil {
+		var settings persistedSettings
+		if json.Unmarshal(content, &settings) == nil && settings.IntervalSeconds >= 3600 && settings.IntervalSeconds <= 604800 {
+			intervalSeconds = settings.IntervalSeconds
+		}
 	}
-	if len(s.passwordHash) != 64 {
-		log.Fatal("ADMIN_PASSWORD_SHA256 must be a SHA-256 hex digest")
+	s := &server{
+		dataDir:       dataDir,
+		domain:        env("MIRROR_DOMAIN", "rules.coralbay.top"),
+		authDisabled:  strings.EqualFold(env("ADMIN_AUTH_DISABLED", "true"), "true"),
+		updaterURL:    env("UPDATER_URL", "http://updater:8080/v1/update"),
+		updaterToken:  os.Getenv("UPDATER_TOKEN"),
+		interval:      time.Duration(intervalSeconds) * time.Second,
+		scheduleReset: make(chan time.Duration, 1),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/public/status", s.publicStatus)
-	mux.HandleFunc("POST /api/login", s.login)
-	mux.HandleFunc("POST /api/logout", s.auth(s.logout))
+	mux.HandleFunc("GET /api/public/rules", s.ruleCatalog)
 	mux.HandleFunc("GET /api/admin/status", s.auth(s.adminStatus))
 	mux.HandleFunc("POST /api/admin/sync", s.auth(s.syncNow))
 	mux.HandleFunc("GET /api/admin/logs", s.auth(s.getLogs))
 	mux.HandleFunc("GET /api/admin/releases", s.auth(s.releases))
 	mux.HandleFunc("POST /api/admin/rollback", s.auth(s.rollback))
+	mux.HandleFunc("PUT /api/admin/settings", s.auth(s.updateSettings))
+	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /admin/", s.adminPage)
 	mux.HandleFunc("GET /", s.publicFiles)
@@ -109,14 +121,60 @@ func (s *server) publicStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *server) ruleCatalog(w http.ResponseWriter, _ *http.Request) {
+	content, err := os.ReadFile("/app/expected-files.txt")
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "规则清单读取失败"})
+		return
+	}
+	items := make([]map[string]any, 0, 33)
+	for _, relative := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		relative = strings.TrimSpace(relative)
+		if relative == "" {
+			continue
+		}
+		info, statErr := os.Stat(filepath.Join(s.dataDir, "current", filepath.FromSlash(relative)))
+		behavior := "domain"
+		if strings.Contains(relative, "/ip/") {
+			behavior = "ipcidr"
+		}
+		item := map[string]any{
+			"name": strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative)),
+			"path": relative, "behavior": behavior, "format": "mrs",
+			"original_url": "https://github.com/666OS/rules/raw/release/" + relative,
+			"mirror_url":   "https://" + s.domain + "/" + relative,
+			"cached":       statErr == nil, "readable": false,
+			"detail": "MRS 是 Mihomo 编译后二进制规则集，支持下载和元数据检查，不能直接作为文本展开。",
+		}
+		if statErr == nil {
+			item["bytes"] = info.Size()
+			item["modified"] = info.ModTime()
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, 200, map[string]any{"rules": items, "count": len(items)})
+}
+
 func (s *server) adminStatus(w http.ResponseWriter, _ *http.Request) {
 	status, _ := s.readStatus()
+	type releaseResult struct{ version, url string }
+	releaseChannel := make(chan releaseResult, 1)
+	certificateChannel := make(chan map[string]any, 1)
+	go func() { latest, url := latestVersion(); releaseChannel <- releaseResult{latest, url} }()
+	go func() { certificateChannel <- certificateStatus(s.domain) }()
+	icons := s.iconStatus()
+	var disk syscall.Statfs_t
+	_ = syscall.Statfs(s.dataDir, &disk)
+	release := <-releaseChannel
+	cert := <-certificateChannel
 	s.mu.RLock()
 	response := map[string]any{
 		"version": version, "domain": s.domain, "syncing": s.syncing,
 		"last_error": s.lastError, "interval_seconds": int(s.interval.Seconds()),
-		"status":       status,
-		"template_url": "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
+		"status": status, "latest_version": release.version, "update_available": newerVersion(release.version, "v"+version),
+		"release_url": release.url, "certificate": cert, "icons": icons,
+		"disk_free_bytes": disk.Bavail * uint64(disk.Bsize),
+		"template_url":    "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
 	}
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, response)
@@ -132,76 +190,43 @@ func (s *server) readStatus() (mirrorStatus, error) {
 	return status, err
 }
 
-func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Password string `json:"password"`
-	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
-		return
-	}
-	sum := sha256.Sum256([]byte(body.Password))
-	provided := hex.EncodeToString(sum[:])
-	if subtle.ConstantTimeCompare([]byte(provided), []byte(s.passwordHash)) != 1 {
-		time.Sleep(600 * time.Millisecond)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密码错误"})
-		return
-	}
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		http.Error(w, "session error", 500)
-		return
-	}
-	token := hex.EncodeToString(tokenBytes)
-	expires := time.Now().Add(12 * time.Hour)
-	s.mu.Lock()
-	s.sessions[token] = expires
-	s.mu.Unlock()
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-	http.SetCookie(w, &http.Cookie{Name: "coralbay_session", Value: token, Path: "/", Expires: expires, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("coralbay_session")
-		if err != nil {
-			writeJSON(w, 401, map[string]string{"error": "请先登录"})
+		if s.authDisabled {
+			if r.Method != http.MethodGet && r.Header.Get("X-CoralBay-Action") != "console" {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "操作请求缺少控制台标记"})
+				return
+			}
+			next(w, r)
 			return
 		}
-		s.mu.Lock()
-		expires, ok := s.sessions[cookie.Value]
-		if ok && time.Now().After(expires) {
-			delete(s.sessions, cookie.Value)
-			ok = false
-		}
-		s.mu.Unlock()
-		if !ok {
-			writeJSON(w, 401, map[string]string{"error": "登录已失效"})
-			return
-		}
-		next(w, r)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "当前安装未启用免登录控制台"})
 	}
-}
-
-func (s *server) logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie("coralbay_session"); err == nil {
-		s.mu.Lock()
-		delete(s.sessions, cookie.Value)
-		s.mu.Unlock()
-	}
-	http.SetCookie(w, &http.Cookie{Name: "coralbay_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *server) scheduler() {
 	if _, err := s.readStatus(); err != nil {
 		s.startSync()
 	}
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.startSync()
+	timer := time.NewTimer(s.interval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			s.startSync()
+			s.mu.RLock()
+			interval := s.interval
+			s.mu.RUnlock()
+			timer.Reset(interval)
+		case interval := <-s.scheduleReset:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(interval)
+		}
 	}
 }
 
@@ -240,6 +265,117 @@ func (s *server) startSync() bool {
 		s.mu.Unlock()
 	}()
 	return true
+}
+
+func (s *server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var body persistedSettings
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil || body.IntervalSeconds < 3600 || body.IntervalSeconds > 604800 {
+		writeJSON(w, 400, map[string]string{"error": "同步周期必须在 1 小时到 7 天之间"})
+		return
+	}
+	content, _ := json.MarshalIndent(body, "", "  ")
+	temp := filepath.Join(s.dataDir, ".settings.json.next")
+	if err := os.WriteFile(temp, content, 0600); err != nil || os.Rename(temp, filepath.Join(s.dataDir, "settings.json")) != nil {
+		os.Remove(temp)
+		writeJSON(w, 500, map[string]string{"error": "设置保存失败"})
+		return
+	}
+	interval := time.Duration(body.IntervalSeconds) * time.Second
+	s.mu.Lock()
+	s.interval = interval
+	s.mu.Unlock()
+	select {
+	case s.scheduleReset <- interval:
+	default:
+	}
+	s.addLog("同步周期已调整为 " + interval.String())
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *server) updateContainer(w http.ResponseWriter, _ *http.Request) {
+	if s.updaterToken == "" {
+		writeJSON(w, 503, map[string]string{"error": "专用更新器尚未配置，请先重新运行安装脚本"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	go func() {
+		time.Sleep(750 * time.Millisecond)
+		req, _ := http.NewRequest(http.MethodPost, s.updaterURL, nil)
+		req.Header.Set("Authorization", "Bearer "+s.updaterToken)
+		client := &http.Client{Timeout: 10 * time.Minute}
+		resp, err := client.Do(req)
+		if err != nil {
+			s.addLog("容器更新请求失败: " + err.Error())
+			return
+		}
+		resp.Body.Close()
+		s.addLog("容器更新器返回: " + resp.Status)
+	}()
+}
+
+func latestVersion() (string, string) {
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/sexyfeifan/Coralbay-Rules/releases/latest", nil)
+	req.Header.Set("User-Agent", "CoralBay-Rules/"+version)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+	var result struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+	}
+	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&result) != nil {
+		return "", ""
+	}
+	return result.TagName, result.HTMLURL
+}
+
+func newerVersion(candidate, current string) bool {
+	parse := func(value string) [3]int {
+		value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+		parts := strings.Split(value, ".")
+		var result [3]int
+		for index := 0; index < len(parts) && index < 3; index++ {
+			result[index], _ = strconv.Atoi(parts[index])
+		}
+		return result
+	}
+	a, b := parse(candidate), parse(current)
+	for index := 0; index < 3; index++ {
+		if a[index] != b[index] {
+			return a[index] > b[index]
+		}
+	}
+	return false
+}
+
+func certificateStatus(domain string) map[string]any {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(domain, "443"), &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	defer conn.Close()
+	cert := conn.ConnectionState().PeerCertificates[0]
+	return map[string]any{"ok": true, "not_after": cert.NotAfter, "days_remaining": int(time.Until(cert.NotAfter).Hours() / 24), "issuer": cert.Issuer.CommonName}
+}
+
+func (s *server) iconStatus() map[string]any {
+	entries, err := os.ReadDir(filepath.Join(s.dataDir, "current", "_assets", "icons"))
+	count, bytes := 0, int64(0)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".png") {
+				count++
+				if info, e := entry.Info(); e == nil {
+					bytes += info.Size()
+				}
+			}
+		}
+	}
+	return map[string]any{"ok": count == 27, "cached": count, "expected": 27, "bytes": bytes}
 }
 
 func (s *server) addLog(line string) { s.mu.Lock(); defer s.mu.Unlock(); s.addLogLocked(line) }

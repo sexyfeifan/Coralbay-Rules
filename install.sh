@@ -31,22 +31,6 @@ prompt() {
   printf '%s' "${value:-$default}"
 }
 
-prompt_secret() {
-  local label="$1" value
-  printf '%s: ' "$label" >&2
-  IFS= read -r -s value < "$TTY_IN" || true
-  printf '\n' >&2
-  printf '%s' "$value"
-}
-
-sha256_text() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "$1" | sha256sum | awk '{print $1}'
-  else
-    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
-  fi
-}
-
 confirm() {
   local text="$1" answer
   printf '%s [y/N]: ' "$text"
@@ -130,7 +114,11 @@ services:
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
-      ADMIN_PASSWORD_SHA256: ${ADMIN_PASSWORD_SHA256}
+      ADMIN_AUTH_DISABLED: ${ADMIN_AUTH_DISABLED}
+      UPDATER_URL: http://updater:8080/v1/update
+      UPDATER_TOKEN: ${UPDATER_TOKEN}
+    labels:
+      com.centurylinklabs.watchtower.scope: coralbay-rules
     volumes:
       - ./data:/data
     healthcheck:
@@ -139,6 +127,19 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+
+  updater:
+    image: nickfedor/watchtower:1.20.3
+    container_name: coralbay-rules-updater
+    restart: unless-stopped
+    command: --scope coralbay-rules --cleanup
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${UPDATER_TOKEN}
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
 
   web:
     image: caddy:2-alpine
@@ -182,7 +183,11 @@ services:
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
-      ADMIN_PASSWORD_SHA256: ${ADMIN_PASSWORD_SHA256}
+      ADMIN_AUTH_DISABLED: ${ADMIN_AUTH_DISABLED}
+      UPDATER_URL: http://updater:8080/v1/update
+      UPDATER_TOKEN: ${UPDATER_TOKEN}
+    labels:
+      com.centurylinklabs.watchtower.scope: coralbay-rules
     volumes:
       - ./data:/data
     healthcheck:
@@ -193,13 +198,26 @@ services:
       start_period: 60s
     ports:
       - "127.0.0.1:${LOCAL_PORT}:8080"
+
+  updater:
+    image: nickfedor/watchtower:1.20.3
+    container_name: coralbay-rules-updater
+    restart: unless-stopped
+    command: --scope coralbay-rules --cleanup
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${UPDATER_TOKEN}
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
 EOF
   fi
 }
 
 install_service() {
   need_root; need_docker
-  local dir domain email interval mode_choice mode local_port password password_again password_hash
+  local dir domain email interval mode_choice mode local_port updater_token
   dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   load_env "$dir"
   domain="$(prompt '规则域名' "${MIRROR_DOMAIN:-$DEFAULT_DOMAIN}")"
@@ -248,19 +266,7 @@ install_service() {
   esac
   [[ "$interval" =~ ^[0-9]+$ && "$interval" -ge 3600 ]] || fail "同步间隔至少为 3600 秒。"
 
-  if [[ -n "${ADMIN_PASSWORD_SHA256:-}" ]]; then
-    password_hash="$ADMIN_PASSWORD_SHA256"
-    info "已保留现有 Web 管理密码；可通过菜单 11 修改。"
-  else
-    while :; do
-      password="$(prompt_secret '设置 Web 管理密码（至少 8 位）')"
-      [[ ${#password} -ge 8 ]] || { warn "密码至少需要 8 位。"; continue; }
-      password_again="$(prompt_secret '再次输入 Web 管理密码')"
-      [[ "$password" == "$password_again" ]] || { warn "两次密码不一致。"; continue; }
-      password_hash="$(sha256_text "$password")"
-      break
-    done
-  fi
+  updater_token="${UPDATER_TOKEN:-$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')}"
 
   install_manager_command
   install -d -m 0755 "$dir/data" "$dir/caddy_data" "$dir/caddy_config"
@@ -274,7 +280,8 @@ RULES_REPOSITORY=https://github.com/666OS/rules.git
 RULES_BRANCH=release
 DEPLOY_MODE=$mode
 LOCAL_PORT=$local_port
-ADMIN_PASSWORD_SHA256=$password_hash
+ADMIN_AUTH_DISABLED=true
+UPDATER_TOKEN=$updater_token
 EOF
   chmod 600 "$dir/.env"
   write_compose "$dir" "$mode" "$local_port"
@@ -322,27 +329,6 @@ sync_now() {
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app /usr/local/bin/coralbay-rules-sync once
   info "规则同步已完成。"
-}
-
-reset_admin_password() {
-  need_root; need_docker
-  local dir password password_again password_hash temp_env
-  dir="$(prompt '安装目录' "$DEFAULT_DIR")"
-  [[ -f "$dir/.env" && -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
-  while :; do
-    password="$(prompt_secret '输入新的 Web 管理密码（至少 8 位）')"
-    [[ ${#password} -ge 8 ]] || { warn "密码至少需要 8 位。"; continue; }
-    password_again="$(prompt_secret '再次输入新密码')"
-    [[ "$password" == "$password_again" ]] || { warn "两次密码不一致。"; continue; }
-    break
-  done
-  password_hash="$(sha256_text "$password")"
-  temp_env="$(mktemp "${dir}/.env.XXXXXX")"
-  awk -v hash="$password_hash" 'BEGIN{done=0} /^ADMIN_PASSWORD_SHA256=/{print "ADMIN_PASSWORD_SHA256=" hash; done=1; next} {print} END{if(!done) print "ADMIN_PASSWORD_SHA256=" hash}' "$dir/.env" > "$temp_env"
-  chmod 600 "$temp_env"
-  mv "$temp_env" "$dir/.env"
-  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d --force-recreate app
-  info "Web 管理密码已更新。"
 }
 
 show_ppanel_template() {
@@ -460,7 +446,6 @@ menu() {
   8. 检测公网规则地址
   9. 卸载
  10. 查看项目信息
- 11. 修改 Web 管理密码
   0. 退出
 EOF
     choice="$(prompt '请选择功能' "1")"
@@ -475,7 +460,6 @@ EOF
       8) verify_service; pause_menu ;;
       9) uninstall_service; pause_menu ;;
       10) show_info; pause_menu ;;
-      11) reset_admin_password; pause_menu ;;
       0) exit 0 ;;
       *) warn "无效选项"; sleep 1 ;;
     esac
@@ -493,6 +477,5 @@ case "${1:-menu}" in
   update) update_service ;;
   verify) verify_service ;;
   uninstall) uninstall_service ;;
-  password) reset_admin_password ;;
-  *) fail "未知命令。可用命令：menu/install/status/sync/template/certificate/logs/update/verify/uninstall/password" ;;
+  *) fail "未知命令。可用命令：menu/install/status/sync/template/certificate/logs/update/verify/uninstall" ;;
 esac
