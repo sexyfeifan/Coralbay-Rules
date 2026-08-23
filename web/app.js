@@ -44,7 +44,7 @@ function selectTemplate() {
   $('downloadClientTemplate').href = selected.download_url;
   $('downloadClientTemplate').textContent = `下载 .${selected.extension}`;
   $('copyClientTemplate').dataset.url = selected.online_url;
-  const statusMap = {adapted:['adapted','● 已改造'],convertible:['convertible','◐ 可改造'], 'nodes-only':['limited','— 仅节点 / 不适用']};
+  const statusMap = {adapted:['adapted','● 已改造'],converted:['converted','◉ 已转换规则源'],convertible:['convertible','◐ 可改造'], 'nodes-only':['limited','— 仅节点 / 不适用']};
   const state = statusMap[selected.capability] || ['base','○ 官方基础'];
   const status = `<span class="template-status ${state[0]}">${state[1]}</span>`;
   $('clientTemplateHint').innerHTML = `${status}<span>${escapeHTML(selected.description)}</span>`;
@@ -56,9 +56,23 @@ function selectTemplate() {
 }
 async function loadTemplates() {
   const data = await json('/api/public/templates'); templateItems = data.templates || [];
-  const label = item => item.capability === 'adapted' ? '🟢 已改造' : item.capability === 'convertible' ? '🟡 可改造' : '⚪ 仅节点 / 不适用';
+  const label = item => item.capability === 'adapted' ? '🟢 已改造' : item.capability === 'converted' ? '🔵 已转换规则源' : item.capability === 'convertible' ? '🟡 可改造' : '⚪ 仅节点 / 不适用';
   $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${label(item)} · ${escapeHTML(item.name)}</option>`).join('');
   selectTemplate();
+}
+
+let conversionItems = [];
+function renderConversions() {
+  if (!$('conversionRows')) return;
+  const query = ($('conversionSearch').value || '').trim().toLowerCase(), kind = $('conversionKind').value;
+  const items = conversionItems.filter(item => (!kind || item.kind === kind) && (!query || item.id.toLowerCase().includes(query) || item.source.toLowerCase().includes(query)));
+  $('conversionRows').innerHTML = items.map(item => `<tr><td><strong>${escapeHTML(item.id.replace(/^(site|ip)-/,''))}</strong></td><td>${item.kind==='site'?'域名':'IP/CIDR'}</td><td>${Number(item.entries).toLocaleString()}</td><td><code>${escapeHTML(item.source)}</code></td><td><a href="${escapeHTML(item.list_url)}" target="_blank" rel="noreferrer">RULE-SET</a> · <a href="${escapeHTML(item.singbox_url)}" target="_blank" rel="noreferrer">sing-box JSON</a> · <button class="link-button" data-copy-url="${escapeHTML(item.list_url)}">复制链接</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">没有匹配的转换产物</td></tr>';
+  document.querySelectorAll('[data-copy-url]').forEach(button=>button.onclick=async()=>{await navigator.clipboard.writeText(button.dataset.copyUrl);$('message').textContent='转换产物链接已复制'});
+}
+async function loadConversions() {
+  if (!$('conversionRows')) return;
+  try { const data=await json('/api/public/conversions'); conversionItems=data.sets||[]; $('conversionCount').textContent=`${data.count||0} 套产物`; renderConversions(); }
+  catch(error) { $('conversionRows').innerHTML=`<tr><td colspan="5" class="bad">${escapeHTML(error.message)}</td></tr>`; }
 }
 
 async function loadAdmin() {
@@ -86,8 +100,9 @@ if ($('sync')) {
   $('clientTemplate').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
   document.querySelectorAll('[data-copy-field]').forEach(button=>button.onclick=async()=>{const value=$(button.dataset.copyField).textContent;if(value==='（留空）')return;$('message').textContent='字段已复制';await navigator.clipboard.writeText(value)});
   $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${selected.online_url}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
+  $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{const query=$('detailSearch').value.toLowerCase();$('detailEntries').textContent=detailItems.filter(item=>item.toLowerCase().includes(query)).join('\n')};
-  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
+  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
   refreshAll();
 }
 publicStatus();

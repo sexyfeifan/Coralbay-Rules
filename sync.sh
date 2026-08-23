@@ -62,8 +62,11 @@ sync_once() {
   mkdir -p "$release_dir/_sources/geo"
   cp -R "$geo_staging/site" "$geo_staging/ip" "$release_dir/_sources/geo/"
   cp "$geo_staging/LICENSE.txt" "$release_dir/_sources/geo/LICENSE.txt"
+  log "生成跨客户端原生规则集"
+  coralbay-ruleconvert -geo "$geo_staging" -out "$release_dir/_converted"
   rules_base_url="https://$mirror_domain/"
   assets_base_url="https://$mirror_domain/_assets/icons/"
+  native_list_base_url="https://$mirror_domain/_converted/native/list/"
   sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
     -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
     /app/templates/ppanel_openclash_pro_cn.gotmpl \
@@ -129,6 +132,58 @@ sync_once() {
       >> "$release_dir/_templates/clients/stash.gotmpl.next"
   done < "$expected_file"
   mv -f "$release_dir/_templates/clients/stash.gotmpl.next" "$release_dir/_templates/clients/stash.gotmpl"
+
+  # Native text-rule clients share the same audited 666OS geo conversion
+  # output, while retaining Perfect Panel's protocol-specific node renderer.
+  for client in surge loon surfboard; do
+    awk '/^\[Proxy Group\]/{exit} {print}' "/app/templates/clients/perfect-panel/$client.gotmpl" \
+      > "$release_dir/_templates/clients/$client.gotmpl.next"
+    sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
+      "/app/templates/clients/native/$client-tail.conf" \
+      >> "$release_dir/_templates/clients/$client.gotmpl.next"
+    mv -f "$release_dir/_templates/clients/$client.gotmpl.next" "$release_dir/_templates/clients/$client.gotmpl"
+  done
+  awk '/^policy_groups:/{exit} {print}' /app/templates/clients/perfect-panel/egern.gotmpl \
+    > "$release_dir/_templates/clients/egern.gotmpl.next"
+  sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
+    /app/templates/clients/native/egern-tail.yaml \
+    >> "$release_dir/_templates/clients/egern.gotmpl.next"
+  mv -f "$release_dir/_templates/clients/egern.gotmpl.next" "$release_dir/_templates/clients/egern.gotmpl"
+
+  # sing-box family: keep each version's node schema, but move its remote
+  # routing dependencies from third-party SRS URLs to CoralBay's generated,
+  # auditable source-format JSON. Version 3 rule sets work on 1.11-1.14.
+  native_singbox_base_url="https://$mirror_domain/_converted/native/sing-box/"
+  for client in hiddify sing-box-1.11 sing-box-1.12 sing-box-1.13 sing-box-1.14; do
+    template="$release_dir/_templates/clients/$client.gotmpl"
+    sed \
+      -e 's|"format": "binary"|"format": "source"|g' \
+      -e "s|https://anti-ad.net/anti-ad-sing-box.srs|${native_singbox_base_url}site/advertising.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/category-ads-all.srs|${native_singbox_base_url}site/advertising.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/github.srs|${native_singbox_base_url}site/github.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geoip/google.srs|${native_singbox_base_url}ip/google.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/google.srs|${native_singbox_base_url}site/google.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/microsoft.srs|${native_singbox_base_url}site/microsoft.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/openai.srs|${native_singbox_base_url}site/openai.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geoip/telegram.srs|${native_singbox_base_url}ip/telegram.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/telegram.srs|${native_singbox_base_url}site/telegram.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geoip/twitter.srs|${native_singbox_base_url}ip/twitter.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/twitter.srs|${native_singbox_base_url}site/twitter.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/youtube.srs|${native_singbox_base_url}site/youtube.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geoip/netflix.srs|${native_singbox_base_url}ip/netflix.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/netflix.srs|${native_singbox_base_url}site/netflix.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/disney.srs|${native_singbox_base_url}site/disney.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/spotify.srs|${native_singbox_base_url}site/spotify.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/apple.srs|${native_singbox_base_url}site/apple.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo-lite/geoip/apple.srs|${native_singbox_base_url}ip/apple.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/tiktok.srs|${native_singbox_base_url}site/tiktok.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/private.srs|${native_singbox_base_url}site/private.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/geolocation-!cn.srs|${native_singbox_base_url}site/geolocation-!cn.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geosite/cn.srs|${native_singbox_base_url}site/cn.json|g" \
+      -e "s|https://cdn.jsdmirror.com/gh/perfect-panel/rules/geo/geoip/cn.srs|${native_singbox_base_url}ip/cn.json|g" \
+      "$template" > "$template.next"
+    mv -f "$template.next" "$template"
+  done
   cat > "$release_dir/_mirror/status.json.next" <<EOF
 {"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
 EOF

@@ -64,11 +64,30 @@ https://rules.coralbay.top/_assets/icons/Auto.png
 
 ## 客户端模板中心
 
-控制台提供 Perfect Panel 当前 15 类客户端模板的在线链接、复制和下载。Clash/Mihomo/OpenClash 与 Stash 标记为彩色“已改造”，直接使用本项目的 33 个 MRS 镜像；其余客户端显示“官方基础”，因为这些客户端不原生支持 Mihomo MRS，项目不会生成不可用的伪适配。
+控制台提供 Perfect Panel 当前 15 类客户端模板的在线链接、复制和下载，并显示名称、User-Agent、输出格式、URL Scheme 与模板地址。
+
+- Clash/Mihomo/OpenClash 与 Stash 使用本地 33 个 MRS 镜像。
+- Surge、Loon、Surfboard、Egern 使用由 666OS `geo` 可读源生成的原生文本 RULE-SET，并映射 Pro_cn 策略分组。
+- Hiddify 与 sing-box 1.11–1.14 已将第三方核心规则 URL 替换为本项目生成的 source-format JSON；完整 Pro_cn 分组仍以独立状态显示，不会伪装成全部完成。
+- Shadowrocket、Quantumult X、Quantumult 和通用订阅保留纯节点输出，因为 Perfect Panel 的这些模板本身没有完整路由层。
 
 Stash 模板沿用 Perfect Panel 的节点渲染逻辑，并将策略分组、地区筛选、自动测速、负载均衡、规则路由与 providers 完整改造为 666OS Pro_cn 结构。Stash 官方文档确认支持 `include-all`、`filter`、`url-test`、`load-balance`，以及 `domain` 和 `ipcidr` 行为的 MRS 规则集。
 
 模板来源代码按其 MIT 许可证保存在 `templates/clients/perfect-panel/`。
+
+## 跨客户端规则转换器
+
+同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：
+
+```text
+/_converted/native/list/{site|ip}/*.list
+/_converted/native/sing-box/{site|ip}/*.json
+/_converted/manifest.json
+```
+
+转换过程会去除空行、注释与重复项，将 `+.` 域名转换为 `DOMAIN-SUFFIX`，将精确域名转换为 `DOMAIN`，并区分 IPv4 `IP-CIDR` 与 IPv6 `IP-CIDR6`。sing-box JSON 固定使用兼容 1.11–1.14 的 source rule-set version 3。
+
+`release` 中少量只有 MRS、在 `geo` 分支没有公开可逆源的分类会生成零条目的合法占位文件，并在转换清单中明确显示 `0`，绝不会用空规则对象误匹配全部流量。
 
 ## 可读规则详情
 

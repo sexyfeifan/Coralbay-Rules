@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "3.4.0"
+const version = "3.5.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -58,18 +58,18 @@ type clientTemplate struct {
 var clientTemplates = []clientTemplate{
 	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "adapted", "666OS Pro_cn：33 个本地 MRS 规则与本地图标", "Clash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
 	{"stash", "Stash", "yaml", true, "adapted", "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则", "Stash", "Stash", "yaml", "stash://install-config?url=${encodeURIComponent(url)}"},
-	{"surge", "Surge", "conf", false, "convertible", "完整配置；需将 MRS 转换为 Surge RULE-SET 后才能等价适配", "Surge", "Surge", "conf", "surge:///install-config?url=${encodeURIComponent(url)}"},
-	{"loon", "Loon", "conf", false, "convertible", "完整配置；需生成 Loon 原生远程规则集", "Loon", "Loon", "conf", ""},
+	{"surge", "Surge", "conf", true, "adapted", "已生成 666OS Geo 原生 RULE-SET，并映射 Pro_cn 策略分组", "Surge", "Surge", "conf", "surge:///install-config?url=${encodeURIComponent(url)}"},
+	{"loon", "Loon", "conf", true, "adapted", "已生成 666OS Geo 原生远程规则，并映射 Pro_cn 策略分组", "Loon", "Loon", "conf", ""},
 	{"shadowrocket", "Shadowrocket", "txt", false, "nodes-only", "官方模板输出节点 URI，不包含策略组和规则路由", "Shadowrocket", "Shadowrocket", "base64", "shadowrocket://add/sub://${window.btoa(url)}?remark=${encodeURIComponent(name)}"},
 	{"quantumult-x", "Quantumult X", "conf", false, "nodes-only", "官方模板输出节点资源，不是完整分流配置", "Quantumult X", "Quantumult X", "conf", ""},
 	{"quantumult", "Quantumult", "conf", false, "nodes-only", "官方模板仅输出节点，不包含策略组和规则路由", "Quantumult", "Quantumult", "conf", ""},
-	{"surfboard", "Surfboard", "conf", false, "convertible", "完整配置；需生成 Surfboard 兼容的文本规则集", "Surfboard", "Surfboard", "conf", ""},
-	{"egern", "Egern", "yaml", false, "convertible", "完整配置；需生成 Egern 原生 rule-set", "Egern", "Egern", "yaml", ""},
-	{"hiddify", "Hiddify", "json", false, "convertible", "完整 sing-box 配置；需编译并镜像 SRS 规则集", "Hiddify", "Hiddify", "json", ""},
-	{"sing-box-1.11", "sing-box 1.11", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.11", "sing-box 1.11", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
-	{"sing-box-1.12", "sing-box 1.12", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.12", "sing-box 1.12", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
-	{"sing-box-1.13", "sing-box 1.13", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.13", "sing-box 1.13", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
-	{"sing-box-1.14", "sing-box 1.14", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.14", "sing-box 1.14", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"surfboard", "Surfboard", "conf", true, "adapted", "已生成 Surfboard 原生文本 RULE-SET 与 Pro_cn 策略分组", "Surfboard", "Surfboard", "conf", ""},
+	{"egern", "Egern", "yaml", true, "adapted", "已生成 Egern 原生 rule-set 与 Pro_cn 策略分组", "Egern", "Egern", "yaml", "egern:/profiles/new?name=${encodeURIComponent(name)}&url=${encodeURIComponent(url)}"},
+	{"hiddify", "Hiddify", "json", false, "converted", "已切换到本地 666OS Source JSON；完整 Pro_cn 分组仍在适配", "Hiddify", "Hiddify", "json", ""},
+	{"sing-box-1.11", "sing-box 1.11", "json", false, "converted", "已接入本地 Source JSON，并保留 1.11 节点语法", "sing-box 1.11", "sing-box 1.11", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.12", "sing-box 1.12", "json", false, "converted", "已接入本地 Source JSON，并保留 1.12 节点语法", "sing-box 1.12", "sing-box 1.12", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.13", "sing-box 1.13", "json", false, "converted", "已接入本地 Source JSON，并保留 1.13 节点语法", "sing-box 1.13", "sing-box 1.13", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.14", "sing-box 1.14", "json", false, "converted", "已接入本地 Source JSON，并保留 1.14 节点语法", "sing-box 1.14", "sing-box 1.14", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
 	{"default", "通用订阅", "txt", false, "nodes-only", "通用节点 URI 订阅没有策略组或规则路由，分流改造不适用", "Default", "default", "base64", ""},
 }
 
@@ -110,6 +110,7 @@ func main() {
 	mux.HandleFunc("GET /api/public/rules", s.ruleCatalog)
 	mux.HandleFunc("GET /api/public/rule-details", s.ruleDetails)
 	mux.HandleFunc("GET /api/public/templates", s.templateCatalog)
+	mux.HandleFunc("GET /api/public/conversions", s.conversionCatalog)
 	mux.HandleFunc("GET /api/admin/status", s.auth(s.adminStatus))
 	mux.HandleFunc("POST /api/admin/sync", s.auth(s.syncNow))
 	mux.HandleFunc("GET /api/admin/logs", s.auth(s.getLogs))
@@ -208,6 +209,38 @@ func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 	writeJSON(w, 200, map[string]any{"templates": items, "count": len(items)})
+}
+
+func (s *server) conversionCatalog(w http.ResponseWriter, _ *http.Request) {
+	content, err := os.ReadFile(filepath.Join(s.dataDir, "current", "_converted", "manifest.json"))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "转换产物尚未生成，请先同步规则"})
+		return
+	}
+	var manifest struct {
+		Count int `json:"count"`
+		Sets  []struct {
+			ID      string `json:"id"`
+			Kind    string `json:"kind"`
+			Source  string `json:"source"`
+			Entries int    `json:"entries"`
+			List    string `json:"list"`
+			SingBox string `json:"sing_box"`
+		} `json:"sets"`
+	}
+	if json.Unmarshal(content, &manifest) != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "转换清单格式无效"})
+		return
+	}
+	items := make([]map[string]any, 0, len(manifest.Sets))
+	for _, item := range manifest.Sets {
+		items = append(items, map[string]any{
+			"id": item.ID, "kind": item.Kind, "source": item.Source, "entries": item.Entries,
+			"list_url":    "https://" + s.domain + "/_converted/" + item.List,
+			"singbox_url": "https://" + s.domain + "/_converted/" + item.SingBox,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "sets": items})
 }
 
 func (s *server) ruleDetails(w http.ResponseWriter, r *http.Request) {
@@ -644,7 +677,7 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		w.Write(content)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || r.URL.Path == "/_mirror/status.json" {
+	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || strings.HasPrefix(r.URL.Path, "/_converted/") || r.URL.Path == "/_mirror/status.json" {
 		http.StripPrefix("/", http.FileServer(http.Dir(filepath.Join(s.dataDir, "current")))).ServeHTTP(w, r)
 		return
 	}

@@ -1,0 +1,46 @@
+policy_groups:
+  - select: { name: 国外流量, policies: [自动选择, DIRECT, {{ $proxyNames }}] }
+  - auto_test: { name: 自动选择, policies: [{{ $proxyNames }}], latency_test_url: "http://www.gstatic.com/generate_204", interval: 300, tolerance: 100 }
+  - select: { name: 广告拦截, policies: [REJECT, DIRECT] }
+  - select: { name: 网络测试, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 即时通讯, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 社交平台, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 人工智能, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 开发服务, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: EMBY, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 国际媒体, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 游戏平台, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 货币平台, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 谷歌服务, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 脸书服务, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+  - select: { name: 微软服务, policies: [DIRECT, 国外流量, {{ $proxyNames }}] }
+  - select: { name: 苹果服务, policies: [DIRECT, 国外流量, {{ $proxyNames }}] }
+  - select: { name: 国内流量, policies: [DIRECT, 国外流量] }
+  - select: { name: 漏网之鱼, policies: [国外流量, DIRECT, {{ $proxyNames }}] }
+
+rules:
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/private.list", policy: DIRECT }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__ip/private.list", policy: DIRECT }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/connectivity-check.list", policy: 网络测试 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/telegram.list", policy: 即时通讯 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-tm.list", policy: 即时通讯 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__ip/telegram.list", policy: 即时通讯 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-social-media-!cn.list", policy: 社交平台 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-ai-!cn.list", policy: 人工智能 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-dev.list", policy: 开发服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-media.list", policy: 国际媒体 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-games.list", policy: 游戏平台 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/category-cryptocurrency.list", policy: 货币平台 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/google.list", policy: 谷歌服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__ip/google.list", policy: 谷歌服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/facebook.list", policy: 脸书服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__ip/facebook.list", policy: 脸书服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/microsoft.list", policy: 微软服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/apple.list", policy: 苹果服务 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/cn.list", policy: 国内流量 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__ip/cn.list", policy: 国内流量 }
+  - rule_set: { match: "__NATIVE_LIST_BASE_URL__site/geolocation-!cn.list", policy: 国外流量 }
+  - default: { policy: 漏网之鱼 }
+
+mitm:
+  enabled: true
