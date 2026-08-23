@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const version = "2.0.1"
+const version = "2.1.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -72,6 +72,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/logs", s.auth(s.getLogs))
 	mux.HandleFunc("GET /api/admin/releases", s.auth(s.releases))
 	mux.HandleFunc("POST /api/admin/rollback", s.auth(s.rollback))
+	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /admin/", s.adminPage)
 	mux.HandleFunc("GET /", s.publicFiles)
 
@@ -307,6 +308,19 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
 	w.Write(content)
 }
 
+func (s *server) downloadTemplate(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.dataDir, "current", "_templates", "ppanel_openclash_pro_cn.gotmpl")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="CoralBay_OpenClash_PPanel_Template.yaml"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(content)
+}
+
 func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" {
 		name := "web/" + strings.TrimPrefix(r.URL.Path, "/assets/")
@@ -329,7 +343,7 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		w.Write(content)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || r.URL.Path == "/_mirror/status.json" {
+	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || r.URL.Path == "/_mirror/status.json" {
 		http.StripPrefix("/", http.FileServer(http.Dir(filepath.Join(s.dataDir, "current")))).ServeHTTP(w, r)
 		return
 	}

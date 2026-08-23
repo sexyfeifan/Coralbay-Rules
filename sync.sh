@@ -49,9 +49,13 @@ sync_once() {
 
   # Regenerate deployment-specific files even if the upstream commit is the
   # same, so image upgrades and domain changes take effect immediately.
-  mkdir -p "$release_dir/_mirror" "$release_dir/_templates"
+  mkdir -p "$release_dir/_mirror" "$release_dir/_templates" "$release_dir/_assets"
+  rm -rf "$release_dir/_assets/icons"
+  cp -R /app/assets/icons "$release_dir/_assets/icons"
   rules_base_url="https://$mirror_domain/"
-  sed "s|__RULES_BASE_URL__|$rules_base_url|g" \
+  assets_base_url="https://$mirror_domain/_assets/icons/"
+  sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
+    -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
     /app/templates/ppanel_openclash_pro_cn.gotmpl \
     > "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next"
   mv -f "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next" \

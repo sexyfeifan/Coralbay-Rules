@@ -10,6 +10,7 @@ RUN apk add --no-cache ca-certificates curl git tzdata
 
 COPY expected-files.txt /app/expected-files.txt
 COPY templates /app/templates
+COPY assets /app/assets
 COPY sync.sh /usr/local/bin/coralbay-rules-sync
 COPY --from=build /out/coralbay-rules /usr/local/bin/coralbay-rules
 

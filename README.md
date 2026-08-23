@@ -45,9 +45,21 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 sudo coralbay-rules
 ```
 
+推荐使用短命令 `sudo rules`。同时保留 `sudo luse`，或者在终端编码支持良好时使用 `sudo 六六六`。
+
 也可以直接执行子命令，例如 `sudo coralbay-rules status`、`sudo coralbay-rules sync`、`sudo coralbay-rules logs` 和 `sudo coralbay-rules update`。
 
 重新配置前会自动备份 `.env`、Compose 和 Caddy 配置；脚本也会检测 80/443、避免重复安装时误判自己的 3999 端口，并在启动后执行健康检查。
+
+## 本地图标镜像
+
+PPanel 模板使用的 27 个 Qure 策略组图标已经固化在 Docker 镜像中。同步时会复制到 `/_assets/icons/`，并自动把生成模板里的 GitHub 图标地址替换为当前规则域名，例如：
+
+```text
+https://rules.coralbay.top/_assets/icons/Auto.png
+```
+
+这些图标只用于 OpenClash/Mihomo 面板展示，不参与节点测速或流量分流。图标来源：[Koolson/Qure](https://github.com/Koolson/Qure)，固定于上游提交 `b16b260625f873266f6a6a9b88710132774997b8`。
 
 ## 两种部署模式
 
