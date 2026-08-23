@@ -5,6 +5,12 @@
 
 Docker Hub：`sexyfeifan/coralbay-rules:latest`
 
+## Web 管理界面
+
+- `/`：公开状态首页，显示规则版本、校验数量和同步时间。
+- `/admin/`：密码保护的管理后台，可立即同步、查看日志、复制 PPanel 模板链接，以及在保留版本之间回滚。
+- 管理密码在一键安装时设置，只保存 SHA-256 摘要；也可以通过命令行菜单修改。
+
 仓库包含手动触发的多架构 Docker 发布工作流。使用前在 GitHub 仓库中添加
 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 Actions secrets。
 
@@ -29,6 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 8. 检测公网规则地址
 9. 卸载
 10. 查看项目信息
+11. 修改 Web 管理密码
 0. 退出
 ```
 
@@ -44,6 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 
 容器默认只监听 `127.0.0.1:3999`，再由已有 Nginx 将规则域名反向代理到该端口，避免抢占 PPanel 的 80/443。安装脚本会同时检查系统监听端口和 Docker 端口映射；如果 3999 已占用，会提示选择其他 1024–65535 端口。
 
+从 v1 升级到 v2 时重新执行一键脚本，并选择“安装 / 重新配置”。原有规则缓存会保留，安装过程会要求设置新的 Web 管理密码。
+
 Nginx 示例：
 
 ```nginx
@@ -55,6 +64,7 @@ server {
         proxy_pass http://127.0.0.1:3999;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```

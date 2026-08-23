@@ -29,6 +29,22 @@ prompt() {
   printf '%s' "${value:-$default}"
 }
 
+prompt_secret() {
+  local label="$1" value
+  printf '%s: ' "$label" >&2
+  IFS= read -r -s value < "$TTY_IN" || true
+  printf '\n' >&2
+  printf '%s' "$value"
+}
+
+sha256_text() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  else
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  fi
+}
+
 confirm() {
   local text="$1" answer
   printf '%s [y/N]: ' "$text"
@@ -77,19 +93,20 @@ write_compose() {
   if [[ "$mode" == "direct" ]]; then
     cat > "$dir/compose.yaml" <<'EOF'
 services:
-  sync:
-    image: ${SYNC_IMAGE}
-    container_name: coralbay-rules-sync
+  app:
+    image: ${APP_IMAGE}
+    container_name: coralbay-rules
     restart: unless-stopped
     environment:
       RULES_REPOSITORY: ${RULES_REPOSITORY}
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
+      ADMIN_PASSWORD_SHA256: ${ADMIN_PASSWORD_SHA256}
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD-SHELL", "test -s /data/current/_mirror/status.json"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -99,7 +116,7 @@ services:
     image: caddy:2-alpine
     container_name: coralbay-rules-web
     restart: unless-stopped
-    depends_on: [sync]
+    depends_on: [app]
     environment:
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
@@ -109,7 +126,6 @@ services:
       - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./data:/srv/rules:ro
       - ./caddy_data:/data
       - ./caddy_config:/config
 EOF
@@ -119,13 +135,8 @@ EOF
 }
 
 {$MIRROR_DOMAIN} {
-  root * /srv/rules/current
   encode zstd gzip
-  file_server
-  @status path /_mirror/status.json
-  @rules not path /_mirror/status.json
-  header @status Cache-Control "no-store"
-  header @rules Cache-Control "public, max-age=3600, stale-if-error=86400"
+  reverse_proxy app:8080
   log {
     output stdout
   }
@@ -134,53 +145,35 @@ EOF
   else
     cat > "$dir/compose.yaml" <<'EOF'
 services:
-  sync:
-    image: ${SYNC_IMAGE}
-    container_name: coralbay-rules-sync
+  app:
+    image: ${APP_IMAGE}
+    container_name: coralbay-rules
     restart: unless-stopped
     environment:
       RULES_REPOSITORY: ${RULES_REPOSITORY}
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
+      ADMIN_PASSWORD_SHA256: ${ADMIN_PASSWORD_SHA256}
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD-SHELL", "test -s /data/current/_mirror/status.json"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 60s
-
-  web:
-    image: caddy:2-alpine
-    container_name: coralbay-rules-web
-    restart: unless-stopped
-    depends_on: [sync]
     ports:
       - "127.0.0.1:${LOCAL_PORT}:8080"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./data:/srv/rules:ro
-EOF
-    cat > "$dir/Caddyfile" <<'EOF'
-:8080 {
-  root * /srv/rules/current
-  encode zstd gzip
-  file_server
-  @status path /_mirror/status.json
-  @rules not path /_mirror/status.json
-  header @status Cache-Control "no-store"
-  header @rules Cache-Control "public, max-age=3600, stale-if-error=86400"
-}
 EOF
   fi
 }
 
 install_service() {
   need_root; need_docker
-  local dir domain email interval mode_choice mode local_port
+  local dir domain email interval mode_choice mode local_port password password_again password_hash
   dir="$(prompt '安装目录' "$DEFAULT_DIR")"
+  load_env "$dir"
   domain="$(prompt '规则域名' "${MIRROR_DOMAIN:-$DEFAULT_DOMAIN}")"
   valid_domain "$domain" || fail "域名格式不正确：$domain"
   email="$(prompt 'HTTPS 证书邮箱' "${ACME_EMAIL:-$DEFAULT_EMAIL}")"
@@ -219,9 +212,23 @@ install_service() {
   esac
   [[ "$interval" =~ ^[0-9]+$ && "$interval" -ge 3600 ]] || fail "同步间隔至少为 3600 秒。"
 
+  if [[ -n "${ADMIN_PASSWORD_SHA256:-}" ]]; then
+    password_hash="$ADMIN_PASSWORD_SHA256"
+    info "已保留现有 Web 管理密码；可通过菜单 11 修改。"
+  else
+    while :; do
+      password="$(prompt_secret '设置 Web 管理密码（至少 8 位）')"
+      [[ ${#password} -ge 8 ]] || { warn "密码至少需要 8 位。"; continue; }
+      password_again="$(prompt_secret '再次输入 Web 管理密码')"
+      [[ "$password" == "$password_again" ]] || { warn "两次密码不一致。"; continue; }
+      password_hash="$(sha256_text "$password")"
+      break
+    done
+  fi
+
   install -d -m 0755 "$dir/data" "$dir/caddy_data" "$dir/caddy_config"
   cat > "$dir/.env" <<EOF
-SYNC_IMAGE=$IMAGE
+APP_IMAGE=$IMAGE
 MIRROR_DOMAIN=$domain
 ACME_EMAIL=$email
 SYNC_INTERVAL=$interval
@@ -229,7 +236,9 @@ RULES_REPOSITORY=https://github.com/666OS/rules.git
 RULES_BRANCH=release
 DEPLOY_MODE=$mode
 LOCAL_PORT=$local_port
+ADMIN_PASSWORD_SHA256=$password_hash
 EOF
+  chmod 600 "$dir/.env"
   write_compose "$dir" "$mode" "$local_port"
 
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
@@ -237,9 +246,11 @@ EOF
 
   info "服务已启动，规则首次同步可能需要几十秒。"
   if [[ "$mode" == "direct" ]]; then
-    info "状态地址：https://$domain/_mirror/status.json"
+    info "公开首页：https://$domain/"
+    info "管理后台：https://$domain/admin/"
   else
-    info "本地地址：http://127.0.0.1:$local_port/_mirror/status.json"
+    info "本地首页：http://127.0.0.1:$local_port/"
+    info "本地后台：http://127.0.0.1:$local_port/admin/"
     warn "请在现有 Nginx/PPanel 中把 $domain 反向代理到 127.0.0.1:$local_port。"
   fi
 }
@@ -258,8 +269,29 @@ sync_now() {
   need_root; need_docker
   local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
-  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" restart sync
-  info "同步容器已重启，正在立即同步。"
+  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app /usr/local/bin/coralbay-rules-sync once
+  info "规则同步已完成。"
+}
+
+reset_admin_password() {
+  need_root; need_docker
+  local dir password password_again password_hash temp_env
+  dir="$(prompt '安装目录' "$DEFAULT_DIR")"
+  [[ -f "$dir/.env" && -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
+  while :; do
+    password="$(prompt_secret '输入新的 Web 管理密码（至少 8 位）')"
+    [[ ${#password} -ge 8 ]] || { warn "密码至少需要 8 位。"; continue; }
+    password_again="$(prompt_secret '再次输入新密码')"
+    [[ "$password" == "$password_again" ]] || { warn "两次密码不一致。"; continue; }
+    break
+  done
+  password_hash="$(sha256_text "$password")"
+  temp_env="$(mktemp "${dir}/.env.XXXXXX")"
+  awk -v hash="$password_hash" 'BEGIN{done=0} /^ADMIN_PASSWORD_SHA256=/{print "ADMIN_PASSWORD_SHA256=" hash; done=1; next} {print} END{if(!done) print "ADMIN_PASSWORD_SHA256=" hash}' "$dir/.env" > "$temp_env"
+  chmod 600 "$temp_env"
+  mv "$temp_env" "$dir/.env"
+  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d --force-recreate app
+  info "Web 管理密码已更新。"
 }
 
 show_ppanel_template() {
@@ -376,6 +408,7 @@ menu() {
   8. 检测公网规则地址
   9. 卸载
  10. 查看项目信息
+ 11. 修改 Web 管理密码
   0. 退出
 EOF
     choice="$(prompt '请选择功能' "1")"
@@ -390,6 +423,7 @@ EOF
       8) verify_service; pause_menu ;;
       9) uninstall_service; pause_menu ;;
       10) show_info; pause_menu ;;
+      11) reset_admin_password; pause_menu ;;
       0) exit 0 ;;
       *) warn "无效选项"; sleep 1 ;;
     esac
@@ -407,5 +441,6 @@ case "${1:-menu}" in
   update) update_service ;;
   verify) verify_service ;;
   uninstall) uninstall_service ;;
-  *) fail "未知命令。可用命令：menu/install/status/sync/template/certificate/logs/update/verify/uninstall" ;;
+  password) reset_admin_password ;;
+  *) fail "未知命令。可用命令：menu/install/status/sync/template/certificate/logs/update/verify/uninstall/password" ;;
 esac
