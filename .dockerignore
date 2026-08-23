@@ -1,0 +1,6 @@
+.git
+.github
+data
+caddy_data
+caddy_config
+*.log

@@ -1,0 +1,7 @@
+.env
+compose.yaml
+Caddyfile
+data/
+caddy_data/
+caddy_config/
+.DS_Store
