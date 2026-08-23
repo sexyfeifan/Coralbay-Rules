@@ -44,11 +44,12 @@ function selectTemplate() {
   $('downloadClientTemplate').href = selected.download_url;
   $('downloadClientTemplate').textContent = `下载 .${selected.extension}`;
   $('copyClientTemplate').dataset.url = selected.online_url;
-  $('clientTemplateHint').textContent = `${selected.enhanced?'666OS 增强 · ':'官方基础 · '}${selected.description}`;
+  const status = selected.enhanced ? '<span class="template-status adapted">● 已改造</span>' : '<span class="template-status base">○ 官方基础</span>';
+  $('clientTemplateHint').innerHTML = `${status}<span>${escapeHTML(selected.description)}</span>`;
 }
 async function loadTemplates() {
   const data = await json('/api/public/templates'); templateItems = data.templates || [];
-  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}${item.enhanced?'（666OS 增强）':''}</option>`).join('');
+  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${item.enhanced?'🟢 已改造 · ':'⚪ 官方基础 · '}${escapeHTML(item.name)}</option>`).join('');
   selectTemplate();
 }
 

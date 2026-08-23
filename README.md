@@ -64,7 +64,7 @@ https://rules.coralbay.top/_assets/icons/Auto.png
 
 ## 客户端模板中心
 
-控制台提供 Perfect Panel 当前 15 类客户端模板的在线链接、复制和下载。Clash/Mihomo/OpenClash 与 Stash 标记为“666OS 增强”，直接使用本项目的 33 个 MRS 镜像；其余客户端保留 Perfect Panel 官方基础模板，因为这些客户端不原生支持 Mihomo MRS，项目不会生成不可用的伪适配。
+控制台提供 Perfect Panel 当前 15 类客户端模板的在线链接、复制和下载。Clash/Mihomo/OpenClash 与 Stash 标记为彩色“已改造”，直接使用本项目的 33 个 MRS 镜像；其余客户端显示“官方基础”，因为这些客户端不原生支持 Mihomo MRS，项目不会生成不可用的伪适配。
 
 Stash 模板沿用 Perfect Panel 的节点渲染逻辑，并将规则层替换为 666OS Pro_cn 的本地 MRS providers。Stash 官方文档确认支持 `domain` 和 `ipcidr` 行为的 MRS 规则集。
 
