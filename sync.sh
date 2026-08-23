@@ -82,12 +82,13 @@ sync_once() {
   done
   cp "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$release_dir/_templates/clients/clash.gotmpl"
 
-  # Stash supports MRS domain/ipcidr providers. Keep Perfect Panel's node
-  # renderer and policy groups, then replace its rule layer with 666OS Pro_cn.
-  awk '/^rules:/{exit} {print}' /app/templates/clients/perfect-panel/stash.gotmpl \
+  # Keep Perfect Panel's node renderer, then map the complete 666OS Pro_cn
+  # policy group and MRS rule layers to Stash-native fields.
+  awk '/^proxy-groups:/{exit} {print}' /app/templates/clients/perfect-panel/stash.gotmpl \
     > "$release_dir/_templates/clients/stash.gotmpl.next"
-  printf '  - { name: "🛑 Advertising", type: select, proxies: [REJECT-DROP, REJECT, 🎯 Direct] }\n\nrules:\n' \
+  sed "s|__ASSETS_BASE_URL__|$assets_base_url|g" /app/templates/clients/stash-proxy-groups.yaml \
     >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  printf '\nrules:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
   while IFS= read -r relative_path; do
     [ -n "$relative_path" ] || continue
     base="$(basename "$relative_path" .mrs)"
@@ -95,22 +96,28 @@ sync_once() {
     [ "${relative_path#mihomo/ip/}" != "$relative_path" ] && suffix="IP"
     provider="${base}${suffix}"
     case "$base" in
-      Tracking|Advertising) target="🛑 Advertising" ;;
-      Private) target="🎯 Direct" ;;
-      Apple) target="🍎 Apple" ;;
-      Telegram) target="📟 Telegram" ;;
-      AI) target="🤖 AI" ;;
-      Netflix|Disney|Emby|Streaming|YouTube|Spotify) target="📺 GlobalMedia" ;;
-      Games) target="🎮 Game" ;;
-      Crypto) target="🪙 Crypto" ;;
-      Google) target="🔍 Google" ;;
-      Microsoft) target="🪟 Microsoft" ;;
-      China) target="🇨🇳 China" ;;
-      *) target="🚀 Proxy" ;;
+      Tracking|Advertising) target="广告拦截" ;;
+      Private) target="DIRECT" ;;
+      Speedtest) target="网络测试" ;;
+      TM|Telegram) target="即时通讯" ;;
+      SocialMedia) target="社交平台" ;;
+      AI) target="人工智能" ;;
+      Dev) target="开发服务" ;;
+      Emby) target="EMBY" ;;
+      Netflix|Disney|Streaming|YouTube|Spotify) target="国际媒体" ;;
+      Games) target="游戏平台" ;;
+      Crypto) target="货币平台" ;;
+      Google) target="谷歌服务" ;;
+      Facebook) target="脸书服务" ;;
+      Microsoft) target="微软服务" ;;
+      Apple) target="苹果服务" ;;
+      Proxy) target="国外流量" ;;
+      China) target="国内流量" ;;
+      *) target="国外流量" ;;
     esac
     printf '  - RULE-SET,%s,%s\n' "$provider" "$target" >> "$release_dir/_templates/clients/stash.gotmpl.next"
   done < "$expected_file"
-  printf '  - MATCH,🐠 Final\n\nrule-providers:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  printf '  - MATCH,漏网之鱼\n\nrule-providers:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
   while IFS= read -r relative_path; do
     [ -n "$relative_path" ] || continue
     base="$(basename "$relative_path" .mrs)"

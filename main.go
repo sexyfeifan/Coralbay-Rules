@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "3.2.2"
+const version = "3.3.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -52,7 +52,7 @@ type clientTemplate struct {
 
 var clientTemplates = []clientTemplate{
 	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "666OS Pro_cn：33 个本地 MRS 规则与本地图标"},
-	{"stash", "Stash", "yaml", true, "666OS Pro_cn：33 个本地 MRS 规则，适配 Stash domain/ipcidr"},
+	{"stash", "Stash", "yaml", true, "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则"},
 	{"surge", "Surge", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
 	{"loon", "Loon", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
 	{"shadowrocket", "Shadowrocket", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
