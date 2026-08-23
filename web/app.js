@@ -44,12 +44,20 @@ function selectTemplate() {
   $('downloadClientTemplate').href = selected.download_url;
   $('downloadClientTemplate').textContent = `下载 .${selected.extension}`;
   $('copyClientTemplate').dataset.url = selected.online_url;
-  const status = selected.enhanced ? '<span class="template-status adapted">● 已改造</span>' : '<span class="template-status base">○ 官方基础</span>';
+  const statusMap = {adapted:['adapted','● 已改造'],convertible:['convertible','◐ 可改造'], 'nodes-only':['limited','— 仅节点 / 不适用']};
+  const state = statusMap[selected.capability] || ['base','○ 官方基础'];
+  const status = `<span class="template-status ${state[0]}">${state[1]}</span>`;
   $('clientTemplateHint').innerHTML = `${status}<span>${escapeHTML(selected.description)}</span>`;
+  $('ppanelName').textContent = selected.ppanel_name || '';
+  $('ppanelUA').textContent = selected.user_agent || '';
+  $('ppanelFormat').textContent = selected.output_format || '';
+  $('ppanelScheme').textContent = selected.url_scheme || '（留空）';
+  $('ppanelTemplateURL').textContent = selected.online_url || '';
 }
 async function loadTemplates() {
   const data = await json('/api/public/templates'); templateItems = data.templates || [];
-  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${item.enhanced?'🟢 已改造 · ':'⚪ 官方基础 · '}${escapeHTML(item.name)}</option>`).join('');
+  const label = item => item.capability === 'adapted' ? '🟢 已改造' : item.capability === 'convertible' ? '🟡 可改造' : '⚪ 仅节点 / 不适用';
+  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${label(item)} · ${escapeHTML(item.name)}</option>`).join('');
   selectTemplate();
 }
 
@@ -76,6 +84,8 @@ if ($('sync')) {
   $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json','X-CoralBay-Action':'console'},body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()};
   $('refresh').onclick=()=>refreshAll(); $('ruleCard').onclick=()=>$('ruleSection').scrollIntoView({behavior:'smooth'});
   $('clientTemplate').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
+  document.querySelectorAll('[data-copy-field]').forEach(button=>button.onclick=async()=>{const value=$(button.dataset.copyField).textContent;if(value==='（留空）')return;$('message').textContent='字段已复制';await navigator.clipboard.writeText(value)});
+  $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${selected.online_url}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{const query=$('detailSearch').value.toLowerCase();$('detailEntries').textContent=detailItems.filter(item=>item.toLowerCase().includes(query)).join('\n')};
   async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
   refreshAll();

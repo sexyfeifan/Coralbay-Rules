@@ -34,3 +34,22 @@ func TestReadableSource(t *testing.T) {
 		}
 	}
 }
+
+func TestClientTemplateMetadata(t *testing.T) {
+	seen := make(map[string]bool, len(clientTemplates))
+	for _, client := range clientTemplates {
+		if client.ID == "" || client.PPanelName == "" || client.UserAgent == "" || client.OutputFormat == "" {
+			t.Fatalf("client metadata is incomplete: %+v", client)
+		}
+		if seen[client.ID] {
+			t.Fatalf("duplicate client id: %s", client.ID)
+		}
+		seen[client.ID] = true
+		if client.Enhanced != (client.Capability == "adapted") {
+			t.Fatalf("enhanced flag and capability disagree for %s", client.ID)
+		}
+	}
+	if len(clientTemplates) != 15 {
+		t.Fatalf("got %d client templates, want 15", len(clientTemplates))
+	}
+}

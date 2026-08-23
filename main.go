@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "3.3.0"
+const version = "3.4.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -43,29 +43,34 @@ type persistedSettings struct {
 }
 
 type clientTemplate struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Extension   string `json:"extension"`
-	Enhanced    bool   `json:"enhanced"`
-	Description string `json:"description"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Extension    string `json:"extension"`
+	Enhanced     bool   `json:"enhanced"`
+	Capability   string `json:"capability"`
+	Description  string `json:"description"`
+	PPanelName   string `json:"ppanel_name"`
+	UserAgent    string `json:"user_agent"`
+	OutputFormat string `json:"output_format"`
+	URLScheme    string `json:"url_scheme"`
 }
 
 var clientTemplates = []clientTemplate{
-	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "666OS Pro_cn：33 个本地 MRS 规则与本地图标"},
-	{"stash", "Stash", "yaml", true, "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则"},
-	{"surge", "Surge", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"loon", "Loon", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"shadowrocket", "Shadowrocket", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"quantumult-x", "Quantumult X", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"quantumult", "Quantumult", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"surfboard", "Surfboard", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"egern", "Egern", "yaml", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"hiddify", "Hiddify", "json", false, "Perfect Panel 官方节点与基础分流模板"},
-	{"sing-box-1.11", "sing-box 1.11", "json", false, "Perfect Panel 官方对应版本模板"},
-	{"sing-box-1.12", "sing-box 1.12", "json", false, "Perfect Panel 官方对应版本模板"},
-	{"sing-box-1.13", "sing-box 1.13", "json", false, "Perfect Panel 官方对应版本模板"},
-	{"sing-box-1.14", "sing-box 1.14", "json", false, "Perfect Panel 官方对应版本模板"},
-	{"default", "通用订阅", "txt", false, "Perfect Panel 官方通用节点订阅模板"},
+	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "adapted", "666OS Pro_cn：33 个本地 MRS 规则与本地图标", "Clash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
+	{"stash", "Stash", "yaml", true, "adapted", "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则", "Stash", "Stash", "yaml", "stash://install-config?url=${encodeURIComponent(url)}"},
+	{"surge", "Surge", "conf", false, "convertible", "完整配置；需将 MRS 转换为 Surge RULE-SET 后才能等价适配", "Surge", "Surge", "conf", "surge:///install-config?url=${encodeURIComponent(url)}"},
+	{"loon", "Loon", "conf", false, "convertible", "完整配置；需生成 Loon 原生远程规则集", "Loon", "Loon", "conf", ""},
+	{"shadowrocket", "Shadowrocket", "txt", false, "nodes-only", "官方模板输出节点 URI，不包含策略组和规则路由", "Shadowrocket", "Shadowrocket", "base64", "shadowrocket://add/sub://${window.btoa(url)}?remark=${encodeURIComponent(name)}"},
+	{"quantumult-x", "Quantumult X", "conf", false, "nodes-only", "官方模板输出节点资源，不是完整分流配置", "Quantumult X", "Quantumult X", "conf", ""},
+	{"quantumult", "Quantumult", "conf", false, "nodes-only", "官方模板仅输出节点，不包含策略组和规则路由", "Quantumult", "Quantumult", "conf", ""},
+	{"surfboard", "Surfboard", "conf", false, "convertible", "完整配置；需生成 Surfboard 兼容的文本规则集", "Surfboard", "Surfboard", "conf", ""},
+	{"egern", "Egern", "yaml", false, "convertible", "完整配置；需生成 Egern 原生 rule-set", "Egern", "Egern", "yaml", ""},
+	{"hiddify", "Hiddify", "json", false, "convertible", "完整 sing-box 配置；需编译并镜像 SRS 规则集", "Hiddify", "Hiddify", "json", ""},
+	{"sing-box-1.11", "sing-box 1.11", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.11", "sing-box 1.11", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.12", "sing-box 1.12", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.12", "sing-box 1.12", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.13", "sing-box 1.13", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.13", "sing-box 1.13", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"sing-box-1.14", "sing-box 1.14", "json", false, "convertible", "完整配置；需编译并镜像对应版本的 SRS", "sing-box 1.14", "sing-box 1.14", "json", "sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${name}"},
+	{"default", "通用订阅", "txt", false, "nodes-only", "通用节点 URI 订阅没有策略组或规则路由，分流改造不适用", "Default", "default", "base64", ""},
 }
 
 type mirrorStatus struct {
@@ -195,7 +200,9 @@ func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
 	for _, client := range clientTemplates {
 		items = append(items, map[string]any{
 			"id": client.ID, "name": client.Name, "extension": client.Extension,
-			"enhanced": client.Enhanced, "description": client.Description,
+			"enhanced": client.Enhanced, "capability": client.Capability, "description": client.Description,
+			"ppanel_name": client.PPanelName, "user_agent": client.UserAgent,
+			"output_format": client.OutputFormat, "url_scheme": client.URLScheme,
 			"online_url":   "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
 			"download_url": "/downloads/templates/" + client.ID,
 		})
