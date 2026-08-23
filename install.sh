@@ -4,8 +4,6 @@ set -Eeuo pipefail
 APP_NAME="CoralBay Rules"
 IMAGE="${CORALBAY_IMAGE:-sexyfeifan/coralbay-rules:latest}"
 DEFAULT_DIR="/opt/coralbay-rules"
-DEFAULT_DOMAIN="rules.coralbay.top"
-DEFAULT_EMAIL="admin@coralbay.top"
 DEFAULT_INTERVAL="21600"
 DEFAULT_LOCAL_PORT="3999"
 SOURCE_REPO="https://github.com/sexyfeifan/Coralbay-Rules"
@@ -29,6 +27,16 @@ prompt() {
   printf '%s [%s]: ' "$label" "$default" >&2
   IFS= read -r value < "$TTY_IN" || true
   printf '%s' "${value:-$default}"
+}
+
+prompt_required() {
+  local label="$1" value
+  while :; do
+    printf '%s: ' "$label" >&2
+    IFS= read -r value < "$TTY_IN" || true
+    [[ -n "$value" ]] && { printf '%s' "$value"; return; }
+    warn "$label 不能为空。" >&2
+  done
 }
 
 confirm() {
@@ -101,78 +109,8 @@ backup_config() {
 }
 
 write_compose() {
-  local dir="$1" mode="$2" bind_port="$3"
-  if [[ "$mode" == "direct" ]]; then
-    cat > "$dir/compose.yaml" <<'EOF'
-services:
-  app:
-    image: ${APP_IMAGE}
-    container_name: coralbay-rules
-    restart: unless-stopped
-    environment:
-      RULES_REPOSITORY: ${RULES_REPOSITORY}
-      RULES_BRANCH: ${RULES_BRANCH}
-      SYNC_INTERVAL: ${SYNC_INTERVAL}
-      MIRROR_DOMAIN: ${MIRROR_DOMAIN}
-      ADMIN_AUTH_DISABLED: ${ADMIN_AUTH_DISABLED}
-      UPDATER_URL: http://updater:8080/v1/update
-      UPDATER_TOKEN: ${UPDATER_TOKEN}
-    labels:
-      com.centurylinklabs.watchtower.scope: coralbay-rules
-    volumes:
-      - ./data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz >/dev/null"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-
-  updater:
-    image: nickfedor/watchtower:1.20.3
-    container_name: coralbay-rules-updater
-    restart: unless-stopped
-    command: --scope coralbay-rules --cleanup
-    environment:
-      WATCHTOWER_HTTP_API_TOKEN: ${UPDATER_TOKEN}
-      WATCHTOWER_HTTP_API_ENDPOINTS: update
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    labels:
-      com.centurylinklabs.watchtower.enable: "false"
-
-  web:
-    image: caddy:2-alpine
-    container_name: coralbay-rules-web
-    restart: unless-stopped
-    depends_on: [app]
-    environment:
-      MIRROR_DOMAIN: ${MIRROR_DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy_data:/data
-      - ./caddy_config:/config
-EOF
-    cat > "$dir/Caddyfile" <<'EOF'
-{
-  email {$ACME_EMAIL}
-}
-
-{$MIRROR_DOMAIN} {
-  encode zstd gzip
-  reverse_proxy app:8080
-  log {
-    output stdout
-  }
-}
-EOF
-  else
-    cat > "$dir/compose.yaml" <<'EOF'
+  local dir="$1"
+  cat > "$dir/compose.yaml" <<'EOF'
 services:
   app:
     image: ${APP_IMAGE}
@@ -212,49 +150,27 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "false"
 EOF
-  fi
 }
 
 install_service() {
   need_root; need_docker
-  local dir domain email interval mode_choice mode local_port updater_token
+  local dir domain interval local_port updater_token
   dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   load_env "$dir"
-  domain="$(prompt '规则域名' "${MIRROR_DOMAIN:-$DEFAULT_DOMAIN}")"
+  domain="$(prompt_required '规则域名（例如 rules.example.com）')"
   valid_domain "$domain" || fail "域名格式不正确：$domain"
-  email="$(prompt 'HTTPS 证书邮箱' "${ACME_EMAIL:-$DEFAULT_EMAIL}")"
-
-  local recommended_mode="1"
-  if port_is_busy 80 || port_is_busy 443; then
-    recommended_mode="2"
-    warn "检测到 80 或 443 已被占用，建议使用共存反向代理模式。"
-  fi
-  printf '\n部署模式：\n  1) 独立服务器，自动 HTTPS（占用 80/443）\n  2) 已有 Nginx/PPanel/OpenResty，监听 127.0.0.1 端口\n'
-  mode_choice="$(prompt '请选择' "$recommended_mode")"
-  if [[ "$mode_choice" == "2" ]]; then
-    mode="proxy"
-    while :; do
-      local_port="$(prompt '本地监听端口' "$DEFAULT_LOCAL_PORT")"
-      [[ "$local_port" =~ ^[0-9]+$ && "$local_port" -ge 1024 && "$local_port" -le 65535 ]] || {
-        warn "端口必须是 1024 到 65535 之间的数字。"
-        continue
-      }
-      if port_is_busy "$local_port" && ! { [[ -f "$dir/compose.yaml" ]] && [[ "${DEPLOY_MODE:-}" == "proxy" ]] && [[ "${LOCAL_PORT:-}" == "$local_port" ]]; }; then
-        warn "端口 $local_port 已被系统进程或 Docker 容器占用，请换一个端口。"
-        continue
-      fi
-      break
-    done
-  else
-    mode="direct"; local_port="$DEFAULT_LOCAL_PORT"
-    if (port_is_busy 80 || port_is_busy 443) && [[ "${DEPLOY_MODE:-}" != "direct" ]]; then
-      fail "80/443 已被占用。请选择模式 2，或先停止现有 Web 服务。"
+  while :; do
+    local_port="$(prompt '本地监听端口' "${LOCAL_PORT:-$DEFAULT_LOCAL_PORT}")"
+    [[ "$local_port" =~ ^[0-9]+$ && "$local_port" -ge 1024 && "$local_port" -le 65535 ]] || {
+      warn "端口必须是 1024 到 65535 之间的数字。"
+      continue
+    }
+    if port_is_busy "$local_port" && ! { [[ -f "$dir/compose.yaml" ]] && [[ "${LOCAL_PORT:-}" == "$local_port" ]]; }; then
+      warn "端口 $local_port 已被系统进程或 Docker 容器占用，请换一个端口。"
+      continue
     fi
-    printf '\nHTTPS 证书将由 Caddy 自动申请并自动续期。\n'
-    if ! confirm "确认域名已经解析到本机，且公网 80/443 可访问？"; then
-      fail "请先完成域名解析和防火墙放行，再重新安装。"
-    fi
-  fi
+    break
+  done
 
   printf '\n同步间隔：\n  1) 1 小时\n  2) 6 小时（推荐）\n  3) 12 小时\n  4) 24 小时\n  5) 自定义秒数\n'
   case "$(prompt '请选择' "2")" in
@@ -274,17 +190,16 @@ install_service() {
   cat > "$dir/.env" <<EOF
 APP_IMAGE=$IMAGE
 MIRROR_DOMAIN=$domain
-ACME_EMAIL=$email
 SYNC_INTERVAL=$interval
 RULES_REPOSITORY=https://github.com/666OS/rules.git
 RULES_BRANCH=release
-DEPLOY_MODE=$mode
+DEPLOY_MODE=proxy
 LOCAL_PORT=$local_port
 ADMIN_AUTH_DISABLED=true
 UPDATER_TOKEN=$updater_token
 EOF
   chmod 600 "$dir/.env"
-  write_compose "$dir" "$mode" "$local_port"
+  write_compose "$dir"
 
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" config --quiet
 
@@ -302,14 +217,9 @@ EOF
   [[ "$healthy" == "true" ]] || warn "容器尚未通过健康检查，请通过 coralbay-rules logs 查看原因。"
 
   info "服务已启动，规则首次同步可能需要几十秒。"
-  if [[ "$mode" == "direct" ]]; then
-    info "公开首页：https://$domain/"
-    info "管理后台：https://$domain/admin/"
-  else
-    info "本地首页：http://127.0.0.1:$local_port/"
-    info "本地后台：http://127.0.0.1:$local_port/admin/"
-    warn "请在现有 Nginx/PPanel 中把 $domain 反向代理到 127.0.0.1:$local_port。"
-  fi
+  info "本地首页：http://127.0.0.1:$local_port/"
+  info "本地后台：http://127.0.0.1:$local_port/admin/"
+  warn "请在现有 Nginx/PPanel/OpenResty 中把 $domain 反向代理到 127.0.0.1:$local_port，并在现有面板管理 HTTPS 证书。"
   info "今后在 SSH 中输入 rules（或 luse、coralbay-rules、六六六）即可重新打开管理菜单。"
 }
 
@@ -346,30 +256,13 @@ show_ppanel_template() {
 }
 
 certificate_menu() {
-  need_docker
   local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   [[ -f "$dir/.env" && -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
   load_env "$dir"
-  if [[ "${DEPLOY_MODE:-direct}" != "direct" ]]; then
-    warn "当前为 PPanel/Nginx 共存模式。HTTPS 证书应由现有 Nginx、Caddy 或面板申请，本项目不会占用 80/443。"
-    info "本项目后端地址：http://127.0.0.1:${LOCAL_PORT:-$DEFAULT_LOCAL_PORT}"
-    return
-  fi
-
-  printf '\nHTTPS 证书管理：\n  1) 检测公网 HTTPS 和证书\n  2) 重新加载 Caddy 配置（会自动检查/申请证书）\n  3) 查看最近证书日志\n'
-  case "$(prompt '请选择' "1")" in
-    2)
-      docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T web caddy reload --config /etc/caddy/Caddyfile
-      info "Caddy 配置已重新加载，证书申请和续期由 Caddy 自动管理。"
-      ;;
-    3)
-      docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" logs --tail=120 web | grep -Ei 'certificate|acme|tls|error' || true
-      ;;
-    *)
-      curl -fsSI --connect-timeout 15 "https://${MIRROR_DOMAIN}/_mirror/status.json" | head -n 5
-      info "HTTPS 访问正常；Caddy 会在证书到期前自动续期。"
-      ;;
-  esac
+  warn "HTTPS 证书由现有 Nginx/PPanel/OpenResty 管理，本项目不会占用 80/443 或单独申请证书。"
+  info "本项目后端地址：http://127.0.0.1:${LOCAL_PORT:-$DEFAULT_LOCAL_PORT}"
+  info "正在检测公网 HTTPS……"
+  curl -fsSI --connect-timeout 15 "https://${MIRROR_DOMAIN}/_mirror/status.json" | head -n 5
 }
 
 show_logs() {
@@ -383,14 +276,16 @@ update_service() {
   need_root; need_docker
   local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
+  info "正在升级管理脚本……"
+  install_manager_command
+  info "正在拉取最新容器镜像……"
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d
-  install_manager_command
-  info "镜像和服务已经更新。"
+  info "管理脚本、容器镜像和服务已经全部升级。"
 }
 
 verify_service() {
-  local domain="$(prompt '规则域名' "$DEFAULT_DOMAIN")"
+  local domain="$(prompt_required '规则域名（例如 rules.example.com）')"
   info "检测状态接口……"
   curl -fsSL --connect-timeout 10 "https://$domain/_mirror/status.json" && printf '\n'
   info "检测 AI.mrs……"
@@ -442,7 +337,7 @@ menu() {
   4. 获取 PPanel 订阅模板下载链接
   5. HTTPS 证书管理
   6. 查看最近日志
-  7. 更新容器镜像
+  7. 升级程序（管理脚本 + 容器镜像）
   8. 检测公网规则地址
   9. 卸载
  10. 查看项目信息
