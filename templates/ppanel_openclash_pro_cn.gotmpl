@@ -1,0 +1,686 @@
+{{- $GiB := 1073741824.0 -}}
+{{- $used := printf "%.2f" (divf (add (.UserInfo.Download | default 0 | float64) (.UserInfo.Upload | default 0 | float64)) $GiB) -}}
+{{- $traffic := (.UserInfo.Traffic | default 0 | float64) -}}
+{{- $total := printf "%.2f" (divf $traffic $GiB) -}}
+
+{{- $ExpiredAt := "" -}}
+{{- $expStr := printf "%v" .UserInfo.ExpiredAt -}}
+{{- if regexMatch `^[0-9]+$` $expStr -}}
+  {{- $ts := $expStr | float64 -}}
+  {{- $sec := ternary (divf $ts 1000.0) $ts (ge (len $expStr) 13) -}}
+  {{- $ExpiredAt = (date "2006-01-02 15:04:05" (unixEpoch ($sec | int64))) -}}
+{{- else -}}
+  {{- $ExpiredAt = $expStr -}}
+{{- end -}}
+
+{{- $sortFields := list "Sort" "Port" "Name" -}}
+{{- $sortConfig := dict "Sort" "asc" "Port" "asc" "Name" "asc" -}}
+{{- $byKey := dict -}}
+{{- range $p := .Proxies -}}
+  {{- $keyParts := list -}}
+  {{- range $field := $sortFields -}}
+    {{- $order := index $sortConfig $field -}}
+    {{- $val := default "" (printf "%v" (index $p $field)) -}}
+    {{- if or (eq $field "Sort") (eq $field "Port") -}}
+      {{- $val = printf "%08d" (int (default 0 (index $p $field))) -}}
+    {{- end -}}
+    {{- if eq $order "desc" -}}
+      {{- $val = printf "~%s" $val -}}
+    {{- end -}}
+    {{- $keyParts = append $keyParts $val -}}
+  {{- end -}}
+  {{- $_ := set $byKey (join "|" $keyParts) $p -}}
+{{- end -}}
+{{- $sorted := list -}}
+{{- range $k := sortAlpha (keys $byKey) -}}
+  {{- $sorted = append $sorted (index $byKey $k) -}}
+{{- end -}}
+
+{{- $supportSet := dict "shadowsocks" true "vmess" true "vless" true "trojan" true "hysteria2" true "hysteria" true "tuic" true "anytls" true -}}
+{{- $supportedProxies := list -}}
+{{- range $proxy := $sorted -}}
+  {{- if hasKey $supportSet $proxy.Type -}}
+    {{- $supportedProxies = append $supportedProxies $proxy -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $proxyNames := "" -}}
+{{- range $proxy := $supportedProxies -}}
+  {{- if eq $proxyNames "" -}}
+    {{- $proxyNames = printf "%q" $proxy.Name -}}
+  {{- else -}}
+    {{- $proxyNames = printf "%s, %q" $proxyNames $proxy.Name -}}
+  {{- end -}}
+{{- end -}}
+
+# {{ .SiteName }}-{{ .SubscribeName }}
+# Traffic: {{ $used }} GiB/{{ $total }} GiB | Expires: {{ $ExpiredAt }}
+# Generated at: {{ now | date "2006-01-02 15:04:05" }}
+# 分流模板: 666OS/YYDS Pro_cn v2.0.6
+# 节点来源: PPanel 动态用户节点
+
+x-url-test:     &url-test     { type: url-test, url: "https://www.gstatic.com/generate_204", interval: 300, empty-fallback: REJECT, include-all: true, hidden: true, tolerance: 50 }
+x-load-balance: &load-balance { type: load-balance, url: "https://www.gstatic.com/generate_204", interval: 300, empty-fallback: REJECT, include-all: true, hidden: true, strategy: consistent-hashing }
+x-fallback:     &fallback     { type: fallback, url: "https://www.gstatic.com/generate_204", interval: 300, empty-fallback: REJECT }
+
+x-filter-hk:    &filter-hk    "^(?i)(?=.*(香港|港深|深港|沪港|广港|陆港|(?<![a-zA-Z])(hk|hkg)(?![a-zA-Z])|hongkong|hong kong|🇭🇰))(?!.*(排除)).*$"
+x-filter-tw:    &filter-tw    "^(?i)(?=.*(台湾|台北|台中|台南|台东|湾湾|(?<![a-zA-Z])(tw|tpe|khh|tsa)(?![a-zA-Z])|taiwan|taipei|🇹🇼|🇼🇸))(?!.*(排除)).*$"
+x-filter-jp:    &filter-jp    "^(?i)(?=.*(日本|东京|大阪|京都|神奈川|琦玉|(?<![a-zA-Z])(jp|nrt|hnd|kix|cts|fuk)(?![a-zA-Z])|japan|tokyo|🇯🇵))(?!.*(排除)).*$"
+x-filter-sg:    &filter-sg    "^(?i)(?=.*(新加坡|坡县|坡|狮城|(?<![a-zA-Z])(sg|sin|xsp)(?![a-zA-Z])|singapore|🇸🇬))(?!.*(排除)).*$"
+x-filter-kr:    &filter-kr    "^(?i)(?=.*(韩国|韓國|首尔|首爾|南朝鲜|(?<![a-zA-Z])(kr|icn|gmp|pus)(?![a-zA-Z])|korea|seoul|🇰🇷))(?!.*(排除)).*$"
+x-filter-us:    &filter-us    "^(?i)(?=.*(美国|美东|美西|美中|美南|美港|美日|中美|美专|(?<![a-zA-Z])(us|usa|lax|sfo|jfk|sjc)(?![a-zA-Z])|america|united states|🇺🇸))(?!.*(排除)).*$"
+
+x-oversea:      &oversea      [故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, DIRECT]
+x-direct:       &direct       [DIRECT, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略]
+x-us-first:     &us-first     [美国策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, DIRECT]
+x-hk-first:     &hk-first     [香港策略, 故障转移, 全球手动, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, DIRECT]
+x-sg-first:     &sg-first     [狮城策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 韩国策略, 美国策略, DIRECT]
+x-jp-first:     &jp-first     [日本策略, 故障转移, 全球手动, 香港策略, 台湾策略, 狮城策略, 韩国策略, 美国策略, DIRECT]
+
+x-rule-set-domain: &rule-set-domain { type: http, behavior: domain, format: mrs, interval: 86400, proxy: 全球手动 }
+x-rule-set-ipcidr: &rule-set-ipcidr { type: http, behavior: ipcidr, format: mrs, interval: 86400, proxy: 全球手动 }
+
+mode: rule
+ipv6: true
+allow-lan: true
+bind-address: '*'
+mixed-port: 10808
+log-level: info
+unified-delay: true
+tcp-concurrent: true
+external-controller: '0.0.0.0:9090'
+global-client-fingerprint: chrome
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+dns:
+  enable: true
+  cache-algorithm: arc
+  listen: '0.0.0.0:1053'
+  ipv6: true
+  use-hosts: true
+  use-system-hosts: true
+  respect-rules: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - '*.lan'
+    - 'localhost'
+    - 'lens.l.google.com'
+    - '*.srv.nintendo.net'
+    - '*.stun.playstation.net'
+    - 'xbox.*.*.microsoft.com'
+    - '*.xboxlive.com'
+    - '*.msftncsi.com'
+    - '*.msftconnecttest.com'
+    - 'time.*.com'
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - https://cloudflare-dns.com/dns-query
+    - https://dns.google/dns-query
+  fallback:
+    - tls://1.1.1.1
+    - tls://8.8.8.8
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver:
+    - system
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  direct-nameserver-follow-policy: false
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    geosite:
+      - gfw
+      - youtube
+    domain:
+      - '+.google.com'
+      - '+.facebook.com'
+      - '+.twitter.com'
+      - '+.telegram.org'
+
+proxies:
+{{- range $proxy := $supportedProxies }}
+  {{- $server := $proxy.Server -}}
+  {{- if and (contains $server ":") (not (hasPrefix "[" $server)) -}}
+    {{- $server = printf "[%s]" $server -}}
+  {{- end -}}
+
+  {{- $password := $.UserInfo.Password -}}
+  {{- if and (eq $proxy.Type "shadowsocks") (ne (default "" $proxy.ServerKey) "") -}}
+    {{- $method := $proxy.Method -}}
+    {{- if or (hasPrefix "2022-blake3-" $method) (eq $method "2022-blake3-aes-128-gcm") (eq $method "2022-blake3-aes-256-gcm") -}}
+      {{- $userKeyLen := ternary 16 32 (hasSuffix "128-gcm" $method) -}}
+      {{- $pwdStr := printf "%s" $password -}}
+      {{- $userKey := ternary $pwdStr (trunc $userKeyLen $pwdStr) (le (len $pwdStr) $userKeyLen) -}}
+      {{- $serverB64 := b64enc $proxy.ServerKey -}}
+      {{- $userB64 := b64enc $userKey -}}
+      {{- $password = printf "%s:%s" $serverB64 $userB64 -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{- $SkipVerify := $proxy.AllowInsecure -}}
+
+{{- if eq $proxy.Type "shadowsocks" }}
+- name: {{ $proxy.Name | quote }}
+  type: ss
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  cipher: {{ default "aes-128-gcm" $proxy.Method }}
+  password: {{ $password }}
+  udp: true
+  tfo: true
+  {{- if ne (default "" $proxy.Obfs) "" }}
+  plugin: obfs
+  plugin-opts:
+    mode: {{ $proxy.Obfs }}
+    host: {{ default "" $proxy.ObfsHost }}
+  {{- end }}
+{{- else if eq $proxy.Type "vmess" }}
+- name: {{ $proxy.Name | quote }}
+  type: vmess
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  uuid: {{ $password }}
+  alterId: 0
+  cipher: auto
+  udp: true
+  tfo: true
+  {{- if or (eq $proxy.Transport "websocket") (eq $proxy.Transport "ws") }}
+  network: ws
+  ws-opts:
+    path: {{ default "/" $proxy.Path }}
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: {{ $proxy.Host }}
+    {{- end }}
+  {{- else if eq $proxy.Transport "http" }}
+  network: http
+  http-opts:
+    method: GET
+    path: [{{ default "/" $proxy.Path | quote }}]
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: [{{ $proxy.Host | quote }}]
+    {{- end }}
+  {{- else if eq $proxy.Transport "grpc" }}
+  network: grpc
+  grpc-opts:
+    grpc-service-name: {{ default "grpc" $proxy.ServiceName }}
+  {{- end }}
+  {{- if or (eq $proxy.Security "tls") (eq $proxy.Security "reality") }}
+  tls: true
+  {{- end }}
+  {{- if ne (default "" $proxy.SNI) "" }}
+  servername: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $SkipVerify }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if ne (default "" $proxy.Fingerprint) "" }}
+  client-fingerprint: {{ $proxy.Fingerprint }}
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $proxy.Type "vless" }}
+  {{- $encryptionStr := "" -}}
+  {{- $encryption := default "none" $proxy.Encryption -}}
+  {{- if eq $encryption "none" -}}
+    {{- $encryptionStr = "none" -}}
+  {{- else -}}
+    {{- $encParts := list -}}
+    {{- $encParts = append $encParts $encryption -}}
+    {{- if ne (default "" $proxy.Encryption_Mode) "" -}}
+      {{- $encParts = append $encParts $proxy.Encryption_Mode -}}
+    {{- end -}}
+    {{- if ne (default "" $proxy.EncryptionRtt) "" -}}
+      {{- $encParts = append $encParts $proxy.EncryptionRtt -}}
+    {{- end -}}
+    {{- if ne (default "" $proxy.EncryptionClientPadding) "" -}}
+      {{- $encParts = append $encParts $proxy.EncryptionClientPadding -}}
+    {{- end -}}
+    {{- if ne (default "" $proxy.EncryptionPassword) "" -}}
+      {{- $encParts = append $encParts $proxy.EncryptionPassword -}}
+    {{- end -}}
+    {{- $encryptionStr = join "." $encParts -}}
+  {{- end }}
+- name: {{ $proxy.Name | quote }}
+  type: vless
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  uuid: {{ $password }}
+  udp: true
+  tfo: true
+  encryption: {{ $encryptionStr }}
+  {{- if ne (default "" $proxy.Flow) "" }}
+  flow: {{ $proxy.Flow }}
+  {{- end }}
+  {{- if or (eq $proxy.Transport "ws") (eq $proxy.Transport "websocket") }}
+  network: ws
+  ws-opts:
+    path: {{ default "/" $proxy.Path }}
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: {{ $proxy.Host }}
+    {{- end }}
+  {{- else if eq $proxy.Transport "http" }}
+  network: http
+  http-opts:
+    method: GET
+    path: [{{ default "/" $proxy.Path | quote }}]
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: [{{ $proxy.Host | quote }}]
+    {{- end }}
+  {{- else if eq $proxy.Transport "httpupgrade" }}
+  network: httpupgrade
+  httpupgrade-opts:
+    path: {{ default "/" $proxy.Path }}
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: {{ $proxy.Host }}
+    {{- end }}
+  {{- else if eq $proxy.Transport "xhttp" }}
+  network: xhttp
+  xhttp-opts:
+    path: {{ default "/" $proxy.Path }}
+    {{- if ne (default "" $proxy.Host) "" }}
+    host: {{ $proxy.Host }}
+    {{- end }}
+    {{- if ne (default "" $proxy.XhttpMode) "" }}
+    mode: {{ $proxy.XhttpMode }}
+    {{- end }}
+    {{- if ne (default "" $proxy.XhttpExtra) "" }}
+    {{- $extra := fromJson $proxy.XhttpExtra }}
+    {{- if $extra.downloadSettings }}
+    {{- $ds := $extra.downloadSettings }}
+    download-settings:
+      server: {{ $ds.address | quote }}
+      port: {{ $ds.port }}
+      network: {{ default "xhttp" $ds.network }}
+      tls: true
+      {{- if $ds.tlsSettings }}
+      servername: {{ $ds.tlsSettings.serverName | quote }}
+      alpn: {{ $ds.tlsSettings.alpn | toJson }}
+      client-fingerprint: {{ default "chrome" $ds.tlsSettings.fingerprint }}
+      {{- end }}
+      {{- if $ds.realitySettings }}
+      servername: {{ default "" $ds.realitySettings.serverName | quote }}
+      client-fingerprint: {{ default "chrome" $ds.realitySettings.fingerprint }}
+      reality-opts:
+        public-key: {{ $ds.realitySettings.publicKey | quote }}
+        short-id: {{ default "" $ds.realitySettings.shortId | quote }}
+      {{- end }}
+      {{- if $ds.xhttpSettings }}
+      xhttp-opts:
+        host: {{ $ds.xhttpSettings.host | quote }}
+        path: {{ $ds.xhttpSettings.path | quote }}
+        mode: {{ default "auto" $ds.xhttpSettings.mode }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- else if eq $proxy.Transport "grpc" }}
+  network: grpc
+  grpc-opts:
+    grpc-service-name: {{ default "grpc" $proxy.ServiceName }}
+  {{- end }}
+  {{- if or (eq $proxy.Security "tls") (eq $proxy.Security "reality") }}
+  tls: true
+  {{- end }}
+  {{- if ne (default "" $proxy.SNI) "" }}
+  servername: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $proxy.AllowInsecure }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if ne (default "" $proxy.Fingerprint) "" }}
+  client-fingerprint: {{ $proxy.Fingerprint }}
+  {{- end }}
+  {{- if and (eq $proxy.Security "reality") (ne (default "" $proxy.RealityPublicKey) "") }}
+  reality-opts:
+    public-key: {{ $proxy.RealityPublicKey }}
+    {{- if ne (default "" $proxy.RealityShortId) "" }}
+    short-id: {{ $proxy.RealityShortId }}
+    {{- end }}
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $proxy.Type "trojan" }}
+- name: {{ $proxy.Name | quote }}
+  type: trojan
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  password: {{ $password }}
+  udp: true
+  tfo: true
+  {{- if or (eq $proxy.Security "tls") (eq $proxy.Security "reality") }}
+  tls: true
+  {{- end }}
+  {{- if ne (default "" $proxy.SNI) "" }}
+  sni: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $SkipVerify }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if ne (default "" $proxy.Fingerprint) "" }}
+  client-fingerprint: {{ $proxy.Fingerprint }}
+  {{- end }}
+  {{- if and (eq $proxy.Security "reality") (ne (default "" $proxy.RealityPublicKey) "") }}
+  reality-opts:
+    public-key: {{ $proxy.RealityPublicKey }}
+    {{- if ne (default "" $proxy.RealityShortId) "" }}
+    short-id: {{ $proxy.RealityShortId }}
+    {{- end }}
+  {{- end }}
+  {{- if or (eq $proxy.Transport "ws") (eq $proxy.Transport "websocket") }}
+  network: ws
+  ws-opts:
+    path: {{ default "/" $proxy.Path }}
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: {{ $proxy.Host }}
+    {{- end }}
+  {{- else if eq $proxy.Transport "http" }}
+  network: http
+  http-opts:
+    method: GET
+    path: [{{ default "/" $proxy.Path | quote }}]
+    {{- if ne (default "" $proxy.Host) "" }}
+    headers:
+      Host: [{{ $proxy.Host | quote }}]
+    {{- end }}
+  {{- else if eq $proxy.Transport "grpc" }}
+  network: grpc
+  grpc-opts:
+    grpc-service-name: {{ default "grpc" $proxy.ServiceName }}
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else if or (eq $proxy.Type "hysteria2") (eq $proxy.Type "hysteria") }}
+- name: {{ $proxy.Name | quote }}
+  type: hysteria2
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  password: {{ $password }}
+  udp: true
+  tfo: true
+  {{- if ne (default "" $proxy.SNI) "" }}
+  sni: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $proxy.AllowInsecure }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if ne (default "" $proxy.ObfsPassword) "" }}
+  obfs: salamander
+  obfs-password: {{ $proxy.ObfsPassword }}
+  {{- end }}
+  {{- if ne (default "" $proxy.HopPorts) "" }}
+  ports: {{ $proxy.HopPorts }}
+  {{- end }}
+  {{- if ne (default 0 $proxy.HopInterval) 0 }}
+  hop-interval: {{ $proxy.HopInterval }}
+  {{- end }}
+  {{- if ne (default "" (printf "%v" $proxy.UpMbps)) "" }}
+  up: "{{ $proxy.UpMbps }} Mbps"
+  {{- end }}
+  {{- if ne (default "" (printf "%v" $proxy.DownMbps)) "" }}
+  down: "{{ $proxy.DownMbps }} Mbps"
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $proxy.Type "tuic" }}
+- name: {{ $proxy.Name | quote }}
+  type: tuic
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  uuid: {{ default "" $proxy.ServerKey }}
+  password: {{ $password }}
+  udp: true
+  tfo: true
+  {{- if ne (default "" $proxy.SNI) "" }}
+  sni: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $proxy.AllowInsecure }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if $proxy.DisableSNI }}
+  disable-sni: true
+  {{- end }}
+  {{- if $proxy.ReduceRtt }}
+  reduce-rtt: true
+  {{- end }}
+  {{- if ne (default "" $proxy.UDPRelayMode) "" }}
+  udp-relay-mode: {{ $proxy.UDPRelayMode }}
+  {{- end }}
+  {{- if ne (default "" $proxy.CongestionController) "" }}
+  congestion-controller: {{ $proxy.CongestionController }}
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else if eq $proxy.Type "wireguard" }}
+- name: {{ $proxy.Name | quote }}
+  type: wireguard
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  private-key: {{ default "" $proxy.ServerKey }}
+  public-key: {{ default "" $proxy.RealityPublicKey }}
+  udp: true
+  tfo: true
+  {{- if ne (default "" $proxy.Path) "" }}
+  preshared-key: {{ $proxy.Path }}
+  {{- end }}
+  {{- if ne (default "" $proxy.RealityServerAddr) "" }}
+  ip: {{ $proxy.RealityServerAddr }}
+  {{- end }}
+  {{- if ne (default 0 $proxy.RealityServerPort) 0 }}
+  ipv6: {{ $proxy.RealityServerPort }}
+  {{- end }}
+{{- else if eq $proxy.Type "anytls" }}
+- name: {{ $proxy.Name | quote }}
+  type: anytls
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  password: {{ $password }}
+  udp: true
+  tfo: true
+  {{- if ne (default "" $proxy.SNI) "" }}
+  sni: {{ $proxy.SNI }}
+  {{- end }}
+  {{- if $proxy.AllowInsecure }}
+  skip-cert-verify: true
+  {{- end }}
+  {{- if ne (default "" $proxy.Fingerprint) "" }}
+  client-fingerprint: {{ $proxy.Fingerprint }}
+  {{- end }}
+  {{- if $proxy.EchEnable }}
+  ech-opts:
+    enable: true
+    {{- if ne (default "" $proxy.EchServerName) "" }}
+    query-server-name: {{ $proxy.EchServerName }}
+    {{- end }}
+  {{- end }}
+{{- else }}
+- name: {{ $proxy.Name | quote }}
+  type: {{ $proxy.Type }}
+  server: {{ $server }}
+  port: {{ $proxy.Port }}
+  udp: true
+  tfo: true
+{{- end }}
+{{- end }}
+
+# 代理策略组
+proxy-groups:
+  # 路由策略
+  - { name: 广告拦截, type: select, proxies: [REJECT-DROP, REJECT, DIRECT], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Reject.png }
+  - { name: 网络测试, type: select, proxies: *oversea, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Speedtest.png }
+  - { name: 即时通讯, type: select, proxies: *sg-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Telegram_X.png }
+  - { name: 社交平台, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Twitter.png }
+  - { name: 人工智能, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/AI.png }
+  - { name: 开发服务, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/GitHub.png }
+  - { name: EMBY,    type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Emby.png }
+  - { name: 国际媒体, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Streaming.png }
+  - { name: 游戏平台, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Game.png }
+  - { name: 货币平台, type: select, proxies: *jp-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Cryptocurrency_3.png }
+  - { name: 谷歌服务, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Google_Search.png }
+  - { name: 脸书服务, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Facebook.png }
+  - { name: 微软服务, type: select, proxies: *us-first, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Microsoft.png }
+  - { name: 苹果服务, type: select, proxies: *direct, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Apple_1.png }
+  - { name: 国外流量, type: select, proxies: *oversea, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Global.png }
+  - { name: 国内流量, type: select, proxies: *direct, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/China.png }
+  - { name: 漏网之鱼, type: select, proxies: *oversea, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Final.png }
+  
+  # 自动选择
+  - { name: 故障转移, <<: *fallback, proxies: [美国策略, 日本策略, 狮城策略, 韩国策略, 香港策略, 台湾策略], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/ULB.png }
+
+  # 手动选择
+  - { name: 全球手动, type: select, include-all: true, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Clubhouse.png }
+  
+  # 策略组区域
+  - { name: 香港策略, type: select, include-all: true, filter: *filter-hk, proxies: [香港自动, 香港均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Hong_Kong.png }
+  - { name: 台湾策略, type: select, include-all: true, filter: *filter-tw, proxies: [台湾自动, 台湾均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Taiwan.png }
+  - { name: 日本策略, type: select, include-all: true, filter: *filter-jp, proxies: [日本自动, 日本均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Japan.png }
+  - { name: 狮城策略, type: select, include-all: true, filter: *filter-sg, proxies: [狮城自动, 狮城均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Singapore.png }
+  - { name: 韩国策略, type: select, include-all: true, filter: *filter-kr, proxies: [韩国自动, 韩国均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Korea.png }
+  - { name: 美国策略, type: select, include-all: true, filter: *filter-us, proxies: [美国自动, 美国均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/United_States.png }
+
+  # 自动测速
+  - { name: 香港自动, <<: *url-test, filter: *filter-hk, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 台湾自动, <<: *url-test, filter: *filter-tw, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 日本自动, <<: *url-test, filter: *filter-jp, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 狮城自动, <<: *url-test, filter: *filter-sg, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 韩国自动, <<: *url-test, filter: *filter-kr, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 美国自动, <<: *url-test, filter: *filter-us, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+
+  # 负载均衡
+  - { name: 香港均衡, <<: *load-balance, filter: *filter-hk, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 台湾均衡, <<: *load-balance, filter: *filter-tw, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 日本均衡, <<: *load-balance, filter: *filter-jp, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 狮城均衡, <<: *load-balance, filter: *filter-sg, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 韩国均衡, <<: *load-balance, filter: *filter-kr, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 美国均衡, <<: *load-balance, filter: *filter-us, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+
+# 规则路由
+rules:
+  # 广告拦截
+  - RULE-SET,Tracking,广告拦截
+  - RULE-SET,Advertising,广告拦截
+  
+  # 本地/私有
+  - RULE-SET,Private,DIRECT
+  - RULE-SET,PrivateIP,DIRECT,no-resolve
+
+  # 网络测试
+  - RULE-SET,Speedtest,网络测试
+
+  # 即时通讯
+  - RULE-SET,TM,即时通讯
+  - RULE-SET,Telegram,即时通讯
+  - RULE-SET,TelegramIP,即时通讯,no-resolve
+
+  # 社交平台
+  - RULE-SET,SocialMedia,社交平台
+  - RULE-SET,SocialMediaIP,社交平台,no-resolve
+
+  # 人工智能
+  - RULE-SET,AI,人工智能
+  - RULE-SET,AIIP,人工智能,no-resolve
+
+  # 开发服务
+  - RULE-SET,Dev,开发服务
+
+  # 国际媒体
+  - RULE-SET,Emby,EMBY
+  - RULE-SET,EmbyIP,EMBY,no-resolve
+  - RULE-SET,Streaming,国际媒体
+  - RULE-SET,StreamingIP,国际媒体,no-resolve
+
+  # 游戏平台
+  - RULE-SET,Games,游戏平台
+
+  # 货币平台
+  - RULE-SET,Crypto,货币平台
+
+  # 平台服务
+  - RULE-SET,Google,谷歌服务
+  - RULE-SET,GoogleIP,谷歌服务,no-resolve
+  - RULE-SET,Microsoft,微软服务
+  - RULE-SET,Facebook,脸书服务
+  - RULE-SET,Apple,苹果服务
+
+  # 国外流量
+  - RULE-SET,Proxy,国外流量
+  - RULE-SET,ProxyIP,国外流量,no-resolve
+
+  # 国内流量
+  - RULE-SET,China,国内流量
+  - RULE-SET,ChinaIP,国内流量,no-resolve
+
+  # 兜底规则
+  - MATCH,漏网之鱼
+
+# 规则集提供者
+rule-providers:
+  Tracking:       { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Tracking.mrs }
+  Advertising:    { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Advertising.mrs } 
+  Private:        { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Private.mrs }
+  Apple:          { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Apple.mrs }
+  Telegram:       { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Telegram.mrs }
+  TM:             { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/TM.mrs }
+  SocialMedia:    { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/SocialMedia.mrs }
+  AI:             { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/AI.mrs }
+  Dev:            { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Dev.mrs }
+  YouTube:        { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/YouTube.mrs }
+  Netflix:        { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Netflix.mrs }
+  Spotify:        { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Spotify.mrs }
+  Disney:         { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Disney.mrs }
+  Emby:           { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Emby.mrs }
+  Streaming:      { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Streaming.mrs }
+  Proxy:          { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Proxy.mrs }
+  China:          { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/China.mrs }
+  Speedtest:      { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Speedtest.mrs }
+  Games:          { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Games.mrs }
+  Crypto:         { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Crypto.mrs }
+  Google:         { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Google.mrs }
+  Microsoft:      { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Microsoft.mrs }
+  Facebook:       { <<: *rule-set-domain, url: __RULES_BASE_URL__mihomo/domain/Facebook.mrs }
+  PrivateIP:      { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Private.mrs }
+  TelegramIP:     { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Telegram.mrs }
+  SocialMediaIP:  { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/SocialMedia.mrs }
+  AIIP:           { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/AI.mrs }
+  NetflixIP:      { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Netflix.mrs }
+  EmbyIP:         { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Emby.mrs }
+  StreamingIP:    { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Streaming.mrs }
+  ProxyIP:        { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Proxy.mrs }
+  ChinaIP:        { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/China.mrs }
+  GoogleIP:       { <<: *rule-set-ipcidr, url: __RULES_BASE_URL__mihomo/ip/Google.mrs }

@@ -4,6 +4,7 @@ set -eu
 repository="${RULES_REPOSITORY:-https://github.com/666OS/rules.git}"
 branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
+mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
 
 log() {
@@ -41,14 +42,40 @@ sync_once() {
   release_dir="/data/releases/$commit"
   if [ ! -d "$release_dir" ]; then
     rm -rf "$staging/.git"
-    mkdir -p "$staging/_mirror"
-    cat > "$staging/_mirror/status.json" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
-EOF
     mv "$staging" "$release_dir"
   else
     rm -rf "$staging"
   fi
+
+  # Regenerate deployment-specific files even if the upstream commit is the
+  # same, so image upgrades and domain changes take effect immediately.
+  mkdir -p "$release_dir/_mirror" "$release_dir/_templates"
+  rules_base_url="https://$mirror_domain/"
+  sed "s|__RULES_BASE_URL__|$rules_base_url|g" \
+    /app/templates/ppanel_openclash_pro_cn.gotmpl \
+    > "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next"
+  mv -f "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next" \
+    "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl"
+  cat > "$release_dir/_mirror/status.json.next" <<EOF
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
+EOF
+  mv -f "$release_dir/_mirror/status.json.next" "$release_dir/_mirror/status.json"
+  cat > "$release_dir/index.html.next" <<EOF
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CoralBay Rules</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:760px;margin:60px auto;padding:0 20px;line-height:1.7">
+<h1>CoralBay Rules</h1>
+<p>666OS Mihomo MRS 自托管规则镜像。</p>
+<ul>
+  <li><a href="/_mirror/status.json">同步状态</a></li>
+  <li><a href="/_templates/ppanel_openclash_pro_cn.gotmpl" download>PPanel OpenClash Pro_cn 订阅模板</a></li>
+  <li><a href="/mihomo/domain/AI.mrs">规则文件示例：AI.mrs</a></li>
+</ul>
+<p>当前上游版本：<code>$commit</code></p>
+</body></html>
+EOF
+  mv -f "$release_dir/index.html.next" "$release_dir/index.html"
 
   ln -sfn "releases/$commit" /data/current
 

@@ -22,11 +22,13 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 1. 安装 / 重新配置
 2. 查看运行状态
 3. 立即同步规则
-4. 查看最近日志
-5. 更新容器镜像
-6. 检测公网规则地址
-7. 卸载
-8. 查看项目信息
+4. 获取 PPanel 订阅模板下载链接
+5. HTTPS 证书管理
+6. 查看最近日志
+7. 更新容器镜像
+8. 检测公网规则地址
+9. 卸载
+10. 查看项目信息
 0. 退出
 ```
 
@@ -35,6 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 ### 独立服务器
 
 脚本直接监听 80/443，由 Caddy 自动签发和续期 HTTPS 证书。域名的 A/AAAA 记录需要提前指向服务器。
+
+安装环节会要求确认 DNS 和防火墙条件；启动 Caddy 后即自动申请证书。菜单中的“HTTPS 证书管理”可以检测证书、重新加载 Caddy 配置以及查看 ACME/TLS 日志。
 
 ### 与 PPanel/Nginx 共存
 
@@ -63,6 +67,14 @@ curl -fsSI https://rules.coralbay.top/mihomo/domain/AI.mrs
 ```
 
 ## PPanel 模板修改
+
+每次规则同步都会同时生成一份已经替换为当前镜像域名的 PPanel 模板：
+
+```text
+https://rules.coralbay.top/_templates/ppanel_openclash_pro_cn.gotmpl
+```
+
+管理菜单可以显示并检测该下载链接。下载文件后，由用户在 PPanel 客户端管理页面手动替换 `OpenClash Pro` 的订阅模板。
 
 将：
 

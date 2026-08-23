@@ -85,6 +85,7 @@ services:
       RULES_REPOSITORY: ${RULES_REPOSITORY}
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
+      MIRROR_DOMAIN: ${MIRROR_DOMAIN}
     volumes:
       - ./data:/data
     healthcheck:
@@ -141,6 +142,7 @@ services:
       RULES_REPOSITORY: ${RULES_REPOSITORY}
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
+      MIRROR_DOMAIN: ${MIRROR_DOMAIN}
     volumes:
       - ./data:/data
     healthcheck:
@@ -201,6 +203,10 @@ install_service() {
     done
   else
     mode="direct"; local_port="$DEFAULT_LOCAL_PORT"
+    printf '\nHTTPS 证书将由 Caddy 自动申请并自动续期。\n'
+    if ! confirm "确认域名已经解析到本机，且公网 80/443 可访问？"; then
+      fail "请先完成域名解析和防火墙放行，再重新安装。"
+    fi
   fi
 
   printf '\n同步间隔：\n  1) 1 小时\n  2) 6 小时（推荐）\n  3) 12 小时\n  4) 24 小时\n  5) 自定义秒数\n'
@@ -254,6 +260,47 @@ sync_now() {
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" restart sync
   info "同步容器已重启，正在立即同步。"
+}
+
+show_ppanel_template() {
+  local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
+  [[ -f "$dir/.env" ]] || fail "未在 $dir 找到安装。"
+  load_env "$dir"
+  local url="https://${MIRROR_DOMAIN}/_templates/ppanel_openclash_pro_cn.gotmpl"
+  printf '\nPPanel 订阅模板下载链接：\n%b%s%b\n\n' "$cyan" "$url" "$reset"
+  info "下载后进入 PPanel → 订阅配置 → 客户端管理 → OpenClash Pro → 模板，手动全选替换。"
+  if curl -fsSI --connect-timeout 10 "$url" >/dev/null 2>&1; then
+    info "链接检测正常。"
+  else
+    warn "当前无法从公网访问该链接；请确认首次同步、DNS、证书和反向代理配置。"
+  fi
+}
+
+certificate_menu() {
+  need_docker
+  local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
+  [[ -f "$dir/.env" && -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
+  load_env "$dir"
+  if [[ "${DEPLOY_MODE:-direct}" != "direct" ]]; then
+    warn "当前为 PPanel/Nginx 共存模式。HTTPS 证书应由现有 Nginx、Caddy 或面板申请，本项目不会占用 80/443。"
+    info "本项目后端地址：http://127.0.0.1:${LOCAL_PORT:-$DEFAULT_LOCAL_PORT}"
+    return
+  fi
+
+  printf '\nHTTPS 证书管理：\n  1) 检测公网 HTTPS 和证书\n  2) 重新加载 Caddy 配置（会自动检查/申请证书）\n  3) 查看最近证书日志\n'
+  case "$(prompt '请选择' "1")" in
+    2)
+      docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T web caddy reload --config /etc/caddy/Caddyfile
+      info "Caddy 配置已重新加载，证书申请和续期由 Caddy 自动管理。"
+      ;;
+    3)
+      docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" logs --tail=120 web | grep -Ei 'certificate|acme|tls|error' || true
+      ;;
+    *)
+      curl -fsSI --connect-timeout 15 "https://${MIRROR_DOMAIN}/_mirror/status.json" | head -n 5
+      info "HTTPS 访问正常；Caddy 会在证书到期前自动续期。"
+      ;;
+  esac
 }
 
 show_logs() {
@@ -322,11 +369,13 @@ menu() {
   1. 安装 / 重新配置
   2. 查看运行状态
   3. 立即同步规则
-  4. 查看最近日志
-  5. 更新容器镜像
-  6. 检测公网规则地址
-  7. 卸载
-  8. 查看项目信息
+  4. 获取 PPanel 订阅模板下载链接
+  5. HTTPS 证书管理
+  6. 查看最近日志
+  7. 更新容器镜像
+  8. 检测公网规则地址
+  9. 卸载
+ 10. 查看项目信息
   0. 退出
 EOF
     choice="$(prompt '请选择功能' "1")"
@@ -334,11 +383,13 @@ EOF
       1) install_service; pause_menu ;;
       2) service_status; pause_menu ;;
       3) sync_now; pause_menu ;;
-      4) show_logs; pause_menu ;;
-      5) update_service; pause_menu ;;
-      6) verify_service; pause_menu ;;
-      7) uninstall_service; pause_menu ;;
-      8) show_info; pause_menu ;;
+      4) show_ppanel_template; pause_menu ;;
+      5) certificate_menu; pause_menu ;;
+      6) show_logs; pause_menu ;;
+      7) update_service; pause_menu ;;
+      8) verify_service; pause_menu ;;
+      9) uninstall_service; pause_menu ;;
+      10) show_info; pause_menu ;;
       0) exit 0 ;;
       *) warn "无效选项"; sleep 1 ;;
     esac
@@ -350,9 +401,11 @@ case "${1:-menu}" in
   install) install_service ;;
   status) service_status ;;
   sync) sync_now ;;
+  template) show_ppanel_template ;;
+  certificate) certificate_menu ;;
   logs) show_logs ;;
   update) update_service ;;
   verify) verify_service ;;
   uninstall) uninstall_service ;;
-  *) fail "未知命令。可用命令：menu/install/status/sync/logs/update/verify/uninstall" ;;
+  *) fail "未知命令。可用命令：menu/install/status/sync/template/certificate/logs/update/verify/uninstall" ;;
 esac
