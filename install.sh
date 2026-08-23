@@ -8,7 +8,7 @@ DEFAULT_INTERVAL="21600"
 DEFAULT_LOCAL_PORT="3999"
 SOURCE_REPO="https://github.com/sexyfeifan/Coralbay-Rules"
 MANAGER_URL="https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh"
-MANAGER_PATH="/usr/local/bin/coralbay-rules"
+MANAGER_PATH="/usr/local/libexec/coralbay-rules-manager"
 
 if [[ -t 0 ]]; then TTY_IN="/dev/stdin"; else TTY_IN="/dev/tty"; fi
 
@@ -86,11 +86,12 @@ install_manager_command() {
   local temp_script
   temp_script="$(mktemp /tmp/coralbay-rules-manager.XXXXXX)"
   if curl -fsSL --retry 3 --connect-timeout 15 "$MANAGER_URL" -o "$temp_script"; then
+    install -d -m 0755 "$(dirname "$MANAGER_PATH")"
     install -m 0755 "$temp_script" "$MANAGER_PATH"
-    ln -sfn "coralbay-rules" /usr/local/bin/rules
-    ln -sfn "coralbay-rules" /usr/local/bin/luse
-    ln -sfn "coralbay-rules" /usr/local/bin/六六六
-    info "管理快捷命令已安装：rules、coralbay-rules、luse、六六六"
+    ln -sfn "$MANAGER_PATH" /usr/local/bin/rules
+    ln -sfn "$MANAGER_PATH" /usr/local/bin/666
+    rm -f -- /usr/local/bin/coralbay-rules /usr/local/bin/luse /usr/local/bin/六六六
+    info "管理快捷命令已安装：rules、666"
   else
     warn "管理快捷命令下载失败；服务安装仍会继续。"
   fi
@@ -220,7 +221,7 @@ EOF
   info "本地首页：http://127.0.0.1:$local_port/"
   info "本地后台：http://127.0.0.1:$local_port/admin/"
   warn "请在现有 Nginx/PPanel/OpenResty 中把 $domain 反向代理到 127.0.0.1:$local_port，并在现有面板管理 HTTPS 证书。"
-  info "今后在 SSH 中输入 rules（或 luse、coralbay-rules、六六六）即可重新打开管理菜单。"
+  info "今后在 SSH 中输入 rules 或 666 即可重新打开管理菜单。"
 }
 
 service_status() {
