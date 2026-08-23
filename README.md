@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 
 ### 与 PPanel/Nginx 共存
 
-容器只监听 `127.0.0.1:8088`，再由已有 Nginx 将规则域名反向代理到该端口，避免抢占 PPanel 的 80/443。
+容器默认只监听 `127.0.0.1:3999`，再由已有 Nginx 将规则域名反向代理到该端口，避免抢占 PPanel 的 80/443。安装脚本会同时检查系统监听端口和 Docker 端口映射；如果 3999 已占用，会提示选择其他 1024–65535 端口。
 
 Nginx 示例：
 
@@ -48,7 +48,7 @@ server {
     server_name rules.coralbay.top;
 
     location / {
-        proxy_pass http://127.0.0.1:8088;
+        proxy_pass http://127.0.0.1:3999;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

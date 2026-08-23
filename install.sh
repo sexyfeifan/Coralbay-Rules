@@ -7,6 +7,7 @@ DEFAULT_DIR="/opt/coralbay-rules"
 DEFAULT_DOMAIN="rules.coralbay.top"
 DEFAULT_EMAIL="admin@coralbay.top"
 DEFAULT_INTERVAL="21600"
+DEFAULT_LOCAL_PORT="3999"
 SOURCE_REPO="https://github.com/sexyfeifan/Coralbay-Rules"
 
 if [[ -t 0 ]]; then TTY_IN="/dev/stdin"; else TTY_IN="/dev/tty"; fi
@@ -47,6 +48,20 @@ need_docker() {
 
 valid_domain() {
   [[ "$1" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
+port_is_busy() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1 && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}$"; then
+    return 0
+  fi
+  if command -v netstat >/dev/null 2>&1 && netstat -lnt 2>/dev/null | awk 'NR > 2 {print $4}' | grep -Eq ":${port}$"; then
+    return 0
+  fi
+  if docker ps --format '{{.Ports}}' 2>/dev/null | grep -Eq ":${port}->"; then
+    return 0
+  fi
+  return 1
 }
 
 load_env() {
@@ -172,10 +187,20 @@ install_service() {
   mode_choice="$(prompt '请选择' "1")"
   if [[ "$mode_choice" == "2" ]]; then
     mode="proxy"
-    local_port="$(prompt '本地监听端口' "8088")"
-    [[ "$local_port" =~ ^[0-9]+$ ]] || fail "端口必须是数字。"
+    while :; do
+      local_port="$(prompt '本地监听端口' "$DEFAULT_LOCAL_PORT")"
+      [[ "$local_port" =~ ^[0-9]+$ && "$local_port" -ge 1024 && "$local_port" -le 65535 ]] || {
+        warn "端口必须是 1024 到 65535 之间的数字。"
+        continue
+      }
+      if port_is_busy "$local_port"; then
+        warn "端口 $local_port 已被系统进程或 Docker 容器占用，请换一个端口。"
+        continue
+      fi
+      break
+    done
   else
-    mode="direct"; local_port="8088"
+    mode="direct"; local_port="$DEFAULT_LOCAL_PORT"
   fi
 
   printf '\n同步间隔：\n  1) 1 小时\n  2) 6 小时（推荐）\n  3) 12 小时\n  4) 24 小时\n  5) 自定义秒数\n'
