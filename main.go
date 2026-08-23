@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "3.1.4"
+const version = "3.2.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -432,7 +432,7 @@ func (s *server) updateContainer(w http.ResponseWriter, _ *http.Request) {
 func latestVersion() (string, string) {
 	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/sexyfeifan/Coralbay-Rules/releases/latest", nil)
 	req.Header.Set("User-Agent", "CoralBay-Rules/"+version)
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", ""
@@ -468,7 +468,7 @@ func newerVersion(candidate, current string) bool {
 }
 
 func certificateStatus(domain string) map[string]any {
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(domain, "443"), &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12})
 	if err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
@@ -557,6 +557,9 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
 	content, _ := fs.ReadFile(webFS, "web/admin.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("CDN-Cache-Control", "no-store")
+	w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
 	w.Write(content)
 }
 
@@ -619,12 +622,18 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.Header().Set("Content-Type", "application/javascript")
 		}
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("CDN-Cache-Control", "no-store")
+		w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
 		w.Write(content)
 		return
 	}
 	if r.URL.Path == "/" {
 		content, _ := fs.ReadFile(webFS, "web/index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("CDN-Cache-Control", "no-store")
+		w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
 		w.Write(content)
 		return
 	}
