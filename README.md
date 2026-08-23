@@ -39,6 +39,16 @@ curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/inst
 0. 退出
 ```
 
+首次安装完成后，脚本会注册系统快捷命令。以后通过 SSH 登录服务器，直接执行即可重新打开菜单：
+
+```bash
+sudo coralbay-rules
+```
+
+也可以直接执行子命令，例如 `sudo coralbay-rules status`、`sudo coralbay-rules sync`、`sudo coralbay-rules logs` 和 `sudo coralbay-rules update`。
+
+重新配置前会自动备份 `.env`、Compose 和 Caddy 配置；脚本也会检测 80/443、避免重复安装时误判自己的 3999 端口，并在启动后执行健康检查。
+
 ## 两种部署模式
 
 ### 独立服务器

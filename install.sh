@@ -9,6 +9,8 @@ DEFAULT_EMAIL="admin@coralbay.top"
 DEFAULT_INTERVAL="21600"
 DEFAULT_LOCAL_PORT="3999"
 SOURCE_REPO="https://github.com/sexyfeifan/Coralbay-Rules"
+MANAGER_URL="https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh"
+MANAGER_PATH="/usr/local/bin/coralbay-rules"
 
 if [[ -t 0 ]]; then TTY_IN="/dev/stdin"; else TTY_IN="/dev/tty"; fi
 
@@ -86,6 +88,29 @@ load_env() {
     # shellcheck disable=SC1090
     set -a; source "$dir/.env"; set +a
   fi
+}
+
+install_manager_command() {
+  local temp_script
+  temp_script="$(mktemp /tmp/coralbay-rules-manager.XXXXXX)"
+  if curl -fsSL --retry 3 --connect-timeout 15 "$MANAGER_URL" -o "$temp_script"; then
+    install -m 0755 "$temp_script" "$MANAGER_PATH"
+    info "管理快捷命令已安装：coralbay-rules"
+  else
+    warn "管理快捷命令下载失败；服务安装仍会继续。"
+  fi
+  rm -f -- "$temp_script"
+}
+
+backup_config() {
+  local dir="$1" stamp
+  [[ -f "$dir/.env" || -f "$dir/compose.yaml" ]] || return 0
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  install -d -m 0700 "$dir/backups/$stamp"
+  [[ -f "$dir/.env" ]] && cp -p "$dir/.env" "$dir/backups/$stamp/.env"
+  [[ -f "$dir/compose.yaml" ]] && cp -p "$dir/compose.yaml" "$dir/backups/$stamp/compose.yaml"
+  [[ -f "$dir/Caddyfile" ]] && cp -p "$dir/Caddyfile" "$dir/backups/$stamp/Caddyfile"
+  info "原配置已备份到 $dir/backups/$stamp"
 }
 
 write_compose() {
@@ -178,8 +203,13 @@ install_service() {
   valid_domain "$domain" || fail "域名格式不正确：$domain"
   email="$(prompt 'HTTPS 证书邮箱' "${ACME_EMAIL:-$DEFAULT_EMAIL}")"
 
-  printf '\n部署模式：\n  1) 独立服务器，自动 HTTPS（占用 80/443）\n  2) 已有 Nginx/PPanel，监听 127.0.0.1 端口\n'
-  mode_choice="$(prompt '请选择' "1")"
+  local recommended_mode="1"
+  if port_is_busy 80 || port_is_busy 443; then
+    recommended_mode="2"
+    warn "检测到 80 或 443 已被占用，建议使用共存反向代理模式。"
+  fi
+  printf '\n部署模式：\n  1) 独立服务器，自动 HTTPS（占用 80/443）\n  2) 已有 Nginx/PPanel/OpenResty，监听 127.0.0.1 端口\n'
+  mode_choice="$(prompt '请选择' "$recommended_mode")"
   if [[ "$mode_choice" == "2" ]]; then
     mode="proxy"
     while :; do
@@ -188,7 +218,7 @@ install_service() {
         warn "端口必须是 1024 到 65535 之间的数字。"
         continue
       }
-      if port_is_busy "$local_port"; then
+      if port_is_busy "$local_port" && ! { [[ -f "$dir/compose.yaml" ]] && [[ "${DEPLOY_MODE:-}" == "proxy" ]] && [[ "${LOCAL_PORT:-}" == "$local_port" ]]; }; then
         warn "端口 $local_port 已被系统进程或 Docker 容器占用，请换一个端口。"
         continue
       fi
@@ -196,6 +226,9 @@ install_service() {
     done
   else
     mode="direct"; local_port="$DEFAULT_LOCAL_PORT"
+    if (port_is_busy 80 || port_is_busy 443) && [[ "${DEPLOY_MODE:-}" != "direct" ]]; then
+      fail "80/443 已被占用。请选择模式 2，或先停止现有 Web 服务。"
+    fi
     printf '\nHTTPS 证书将由 Caddy 自动申请并自动续期。\n'
     if ! confirm "确认域名已经解析到本机，且公网 80/443 可访问？"; then
       fail "请先完成域名解析和防火墙放行，再重新安装。"
@@ -226,7 +259,9 @@ install_service() {
     done
   fi
 
+  install_manager_command
   install -d -m 0755 "$dir/data" "$dir/caddy_data" "$dir/caddy_config"
+  backup_config "$dir"
   cat > "$dir/.env" <<EOF
 APP_IMAGE=$IMAGE
 MIRROR_DOMAIN=$domain
@@ -241,8 +276,20 @@ EOF
   chmod 600 "$dir/.env"
   write_compose "$dir" "$mode" "$local_port"
 
+  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" config --quiet
+
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d
+
+  local healthy="false"
+  for _ in {1..30}; do
+    if docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+      healthy="true"
+      break
+    fi
+    sleep 2
+  done
+  [[ "$healthy" == "true" ]] || warn "容器尚未通过健康检查，请通过 coralbay-rules logs 查看原因。"
 
   info "服务已启动，规则首次同步可能需要几十秒。"
   if [[ "$mode" == "direct" ]]; then
@@ -253,6 +300,7 @@ EOF
     info "本地后台：http://127.0.0.1:$local_port/admin/"
     warn "请在现有 Nginx/PPanel 中把 $domain 反向代理到 127.0.0.1:$local_port。"
   fi
+  info "今后在 SSH 中输入 coralbay-rules 即可重新打开管理菜单。"
 }
 
 service_status() {
@@ -348,6 +396,7 @@ update_service() {
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d
+  install_manager_command
   info "镜像和服务已经更新。"
 }
 
