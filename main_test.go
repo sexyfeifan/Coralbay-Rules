@@ -20,3 +20,17 @@ func TestNewerVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestReadableSource(t *testing.T) {
+	tests := map[string]string{
+		"mihomo/domain/Google.mrs": "site/google.txt",
+		"mihomo/ip/Google.mrs":     "ip/google.txt",
+		"mihomo/domain/Emby.mrs":   "",
+		"../../etc/passwd":         "",
+	}
+	for path, want := range tests {
+		if got := readableSource(path); got != want {
+			t.Errorf("readableSource(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

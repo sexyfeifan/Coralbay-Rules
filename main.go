@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const version = "3.0.0"
+const version = "3.1.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -40,6 +40,32 @@ type server struct {
 
 type persistedSettings struct {
 	IntervalSeconds int `json:"interval_seconds"`
+}
+
+type clientTemplate struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Extension   string `json:"extension"`
+	Enhanced    bool   `json:"enhanced"`
+	Description string `json:"description"`
+}
+
+var clientTemplates = []clientTemplate{
+	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "666OS Pro_cn：33 个本地 MRS 规则与本地图标"},
+	{"stash", "Stash", "yaml", true, "666OS Pro_cn：33 个本地 MRS 规则，适配 Stash domain/ipcidr"},
+	{"surge", "Surge", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"loon", "Loon", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"shadowrocket", "Shadowrocket", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"quantumult-x", "Quantumult X", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"quantumult", "Quantumult", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"surfboard", "Surfboard", "conf", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"egern", "Egern", "yaml", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"hiddify", "Hiddify", "json", false, "Perfect Panel 官方节点与基础分流模板"},
+	{"sing-box-1.11", "sing-box 1.11", "json", false, "Perfect Panel 官方对应版本模板"},
+	{"sing-box-1.12", "sing-box 1.12", "json", false, "Perfect Panel 官方对应版本模板"},
+	{"sing-box-1.13", "sing-box 1.13", "json", false, "Perfect Panel 官方对应版本模板"},
+	{"sing-box-1.14", "sing-box 1.14", "json", false, "Perfect Panel 官方对应版本模板"},
+	{"default", "通用订阅", "txt", false, "Perfect Panel 官方通用节点订阅模板"},
 }
 
 type mirrorStatus struct {
@@ -77,6 +103,8 @@ func main() {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/public/status", s.publicStatus)
 	mux.HandleFunc("GET /api/public/rules", s.ruleCatalog)
+	mux.HandleFunc("GET /api/public/rule-details", s.ruleDetails)
+	mux.HandleFunc("GET /api/public/templates", s.templateCatalog)
 	mux.HandleFunc("GET /api/admin/status", s.auth(s.adminStatus))
 	mux.HandleFunc("POST /api/admin/sync", s.auth(s.syncNow))
 	mux.HandleFunc("GET /api/admin/logs", s.auth(s.getLogs))
@@ -85,6 +113,7 @@ func main() {
 	mux.HandleFunc("PUT /api/admin/settings", s.auth(s.updateSettings))
 	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
+	mux.HandleFunc("GET /downloads/templates/{client}", s.downloadClientTemplate)
 	mux.HandleFunc("GET /admin/", s.adminPage)
 	mux.HandleFunc("GET /", s.publicFiles)
 
@@ -144,7 +173,13 @@ func (s *server) ruleCatalog(w http.ResponseWriter, _ *http.Request) {
 			"original_url": "https://github.com/666OS/rules/raw/release/" + relative,
 			"mirror_url":   "https://" + s.domain + "/" + relative,
 			"cached":       statErr == nil, "readable": false,
-			"detail": "MRS 是 Mihomo 编译后二进制规则集，支持下载和元数据检查，不能直接作为文本展开。",
+			"detail":   "MRS 是 Mihomo 编译后二进制规则集，支持下载和元数据检查，不能直接作为文本展开。",
+			"icon_url": "/_assets/icons/" + ruleIcon(relative),
+		}
+		if source := readableSource(relative); source != "" {
+			item["readable"] = true
+			item["source_url"] = "https://github.com/666OS/rules/blob/geo/" + source
+			item["detail"] = "存在 666OS geo 可读源，可展开查看全部规则条目。"
 		}
 		if statErr == nil {
 			item["bytes"] = info.Size()
@@ -153,6 +188,87 @@ func (s *server) ruleCatalog(w http.ResponseWriter, _ *http.Request) {
 		items = append(items, item)
 	}
 	writeJSON(w, 200, map[string]any{"rules": items, "count": len(items)})
+}
+
+func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
+	items := make([]map[string]any, 0, len(clientTemplates))
+	for _, client := range clientTemplates {
+		items = append(items, map[string]any{
+			"id": client.ID, "name": client.Name, "extension": client.Extension,
+			"enhanced": client.Enhanced, "description": client.Description,
+			"online_url":   "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
+			"download_url": "/downloads/templates/" + client.ID,
+		})
+	}
+	writeJSON(w, 200, map[string]any{"templates": items, "count": len(items)})
+}
+
+func (s *server) ruleDetails(w http.ResponseWriter, r *http.Request) {
+	relative := r.URL.Query().Get("path")
+	source := readableSource(relative)
+	if source == "" {
+		writeJSON(w, 404, map[string]string{"error": "该 MRS 暂无对应的公开可读源"})
+		return
+	}
+	content, err := os.ReadFile(filepath.Join(s.dataDir, "current", "_sources", "geo", filepath.FromSlash(source)))
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "可读源尚未同步，请先执行规则同步"})
+		return
+	}
+	entries := make([]string, 0)
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			entries = append(entries, line)
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"path": relative, "source_path": source,
+		"source_url": "https://github.com/666OS/rules/blob/geo/" + source,
+		"count":      len(entries), "entries": entries,
+	})
+}
+
+func readableSource(relative string) string {
+	base := strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative))
+	isIP := strings.Contains(relative, "/ip/")
+	if isIP {
+		name := strings.ToLower(base)
+		switch name {
+		case "private", "telegram", "netflix", "google", "facebook":
+			return "ip/" + name + ".txt"
+		}
+		return ""
+	}
+	files := map[string]string{
+		"Tracking": "site/category-public-tracker.txt", "Private": "site/private.txt",
+		"Apple": "site/apple.txt", "Telegram": "site/telegram.txt", "TM": "site/category-tm.txt",
+		"SocialMedia": "site/category-social-media-!cn.txt", "AI": "site/category-ai-!cn.txt",
+		"Dev": "site/category-dev.txt", "YouTube": "site/youtube.txt", "Netflix": "site/netflix.txt",
+		"Spotify": "site/spotify.txt", "Disney": "site/disney.txt", "Streaming": "site/category-media.txt",
+		"Proxy": "site/geolocation-!cn.txt", "China": "site/cn.txt", "Speedtest": "site/connectivity-check.txt",
+		"Games": "site/category-games.txt", "Crypto": "site/category-cryptocurrency.txt", "Google": "site/google.txt",
+		"Microsoft": "site/microsoft.txt", "Facebook": "site/facebook.txt",
+	}
+	return files[base]
+}
+
+func ruleIcon(relative string) string {
+	base := strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative))
+	icons := map[string]string{
+		"Tracking": "Reject.png", "Advertising": "Reject.png", "Private": "China.png",
+		"Apple": "Apple_1.png", "Telegram": "Telegram_X.png", "TM": "Twitter.png",
+		"SocialMedia": "Twitter.png", "AI": "AI.png", "Dev": "GitHub.png",
+		"YouTube": "Streaming.png", "Netflix": "Streaming.png", "Spotify": "Streaming.png",
+		"Disney": "Streaming.png", "Emby": "Emby.png", "Streaming": "Streaming.png",
+		"Proxy": "Global.png", "China": "China.png", "Speedtest": "Speedtest.png",
+		"Games": "Game.png", "Crypto": "Cryptocurrency_3.png", "Google": "Google_Search.png",
+		"Microsoft": "Microsoft.png", "Facebook": "Facebook.png",
+	}
+	if icon := icons[base]; icon != "" {
+		return icon
+	}
+	return "Global.png"
 }
 
 func (s *server) adminStatus(w http.ResponseWriter, _ *http.Request) {
@@ -453,6 +569,39 @@ func (s *server) downloadTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="CoralBay_OpenClash_PPanel_Template.yaml"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(content)
+}
+
+func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("client")
+	var selected *clientTemplate
+	for index := range clientTemplates {
+		if clientTemplates[index].ID == id {
+			selected = &clientTemplates[index]
+			break
+		}
+	}
+	if selected == nil {
+		http.NotFound(w, r)
+		return
+	}
+	path := filepath.Join(s.dataDir, "current", "_templates", "clients", selected.ID+".gotmpl")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	contentType := "text/plain; charset=utf-8"
+	if selected.Extension == "yaml" {
+		contentType = "application/yaml; charset=utf-8"
+	}
+	if selected.Extension == "json" {
+		contentType = "application/json; charset=utf-8"
+	}
+	filename := "CoralBay_PPanel_" + strings.ReplaceAll(selected.ID, "-", "_") + "." + selected.Extension
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(content)
 }

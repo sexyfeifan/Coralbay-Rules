@@ -1,0 +1,148 @@
+{{- $GiB := 1073741824.0 -}}
+{{- $used := printf "%.2f" (divf (add (.UserInfo.Download | default 0 | float64) (.UserInfo.Upload | default 0 | float64)) $GiB) -}}
+{{- $traffic := (.UserInfo.Traffic | default 0 | float64) -}}
+{{- $total := printf "%.2f" (divf $traffic $GiB) -}}
+
+{{- $ExpiredAt := "" -}}
+{{- $expStr := printf "%v" .UserInfo.ExpiredAt -}}
+{{- if regexMatch `^[0-9]+$` $expStr -}}
+  {{- $ts := $expStr | float64 -}}
+  {{- $sec := ternary (divf $ts 1000.0) $ts (ge (len $expStr) 13) -}}
+  {{- $ExpiredAt = (date "2006-01-02 15:04:05" (unixEpoch ($sec | int64))) -}}
+{{- else -}}
+  {{- $ExpiredAt = $expStr -}}
+{{- end -}}
+
+{{- $sortFields := list "Sort" "Port" "Name" -}}
+{{- $sortConfig := dict "Sort" "asc" "Port" "asc" "Name" "asc" -}}
+{{- $byKey := dict -}}
+{{- range $p := .Proxies -}}
+  {{- $keyParts := list -}}
+  {{- range $field := $sortFields -}}
+    {{- $order := index $sortConfig $field -}}
+    {{- $val := default "" (printf "%v" (index $p $field)) -}}
+    {{- if or (eq $field "Sort") (eq $field "Port") -}}
+      {{- $val = printf "%08d" (int (default 0 (index $p $field))) -}}
+    {{- end -}}
+    {{- if eq $order "desc" -}}
+      {{- $val = printf "~%s" $val -}}
+    {{- end -}}
+    {{- $keyParts = append $keyParts $val -}}
+  {{- end -}}
+  {{- $_ := set $byKey (join "|" $keyParts) $p -}}
+{{- end -}}
+{{- $sorted := list -}}
+{{- range $k := sortAlpha (keys $byKey) -}}
+  {{- $sorted = append $sorted (index $byKey $k) -}}
+{{- end -}}
+
+{{- /* $supportSet derived from constants.ts protocols + Quantumult X platform support */ -}}
+{{- $supportSet := dict "shadowsocks" true "vmess" true "vless" true "trojan" true "anytls" true "http" true "socks" true -}}
+{{- $supportedProxies := list -}}
+{{- range $proxy := $sorted -}}
+  {{- $proxyType := lower (default "" $proxy.Type) -}}
+  {{- if hasKey $supportSet $proxyType -}}
+    {{- $supportedProxies = append $supportedProxies $proxy -}}
+  {{- end -}}
+{{- end -}}
+
+# {{ .SiteName }}-{{ .SubscribeName }}
+# Traffic: {{ $used }} GiB/{{ $total }} GiB | Expires: {{ $ExpiredAt }}
+# Generated at: {{ now | date "2006-01-02 15:04:05" }}
+
+{{- range $proxy := $supportedProxies -}}
+  {{- $proxyType := lower (default "" $proxy.Type) -}}
+  {{- $server := $proxy.Server -}}
+  {{- if and (contains $server ":") (not (hasPrefix "[" $server)) -}}
+    {{- $server = printf "[%s]" $server -}}
+  {{- end -}}
+  {{- /* 修复1：优先获取 UUID/Password，如果都没有才回退到全局密码 */ -}}
+  {{- $password := $.UserInfo.Password -}}
+  {{- if ne (default "" $proxy.UUID) "" -}}{{- $password = $proxy.UUID -}}{{- end -}}
+  {{- if ne (default "" $proxy.Password) "" -}}{{- $password = $proxy.Password -}}{{- end -}}
+  {{- if and (eq $proxyType "shadowsocks") (ne (default "" $proxy.ServerKey) "") -}}
+    {{- $method := $proxy.Method -}}
+    {{- if or (hasPrefix "2022-blake3-" $method) (eq $method "2022-blake3-aes-128-gcm") (eq $method "2022-blake3-aes-256-gcm") -}}
+      {{- $userKeyLen := ternary 16 32 (hasSuffix "128-gcm" $method) -}}
+      {{- $pwdStr := printf "%s" $password -}}
+      {{- $userKey := ternary $pwdStr (trunc $userKeyLen $pwdStr) (le (len $pwdStr) $userKeyLen) -}}
+      {{- $serverB64 := b64enc $proxy.ServerKey -}}
+      {{- $userB64 := b64enc $userKey -}}
+      {{- $password = printf "%s:%s" $serverB64 $userB64 -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $SkipVerify := $proxy.AllowInsecure -}}
+  {{- $hasReality := and (ne (default "" $proxy.Security) "") (eq $proxy.Security "reality") (ne (default "" $proxy.RealityPublicKey) "") -}}
+  {{- /* 修复2：智能合并提取 Host 和 SNI 字段，防止伪装域名丢失 */ -}}
+  {{- $host := default "" $proxy.Host -}}
+  {{- $sni := default "" $proxy.SNI -}}
+  {{- $bestHost := $host -}}{{- if eq $bestHost "" -}}{{- $bestHost = $sni -}}{{- end -}}
+  {{- $bestSni := $sni -}}{{- if eq $bestSni "" -}}{{- $bestSni = $host -}}{{- end -}}
+  {{- /* ========== shadowsocks ========== */ -}}
+  {{- if eq $proxyType "shadowsocks" }}
+    {{- $method := default "aes-128-gcm" $proxy.Method }}
+    {{- /* obfs enum from constants.ts SECURITY.shadowsocks: 'none','http','tls' */ -}}
+    {{- $ssObfs := default "none" $proxy.Obfs }}
+    {{- $ssObfsHost := default "" $proxy.ObfsHost -}}{{- if eq $ssObfsHost "" -}}{{- $ssObfsHost = $bestHost -}}{{- end -}}
+shadowsocks={{ $server }}:{{ $proxy.Port }}, method={{ $method }}, password={{ $password }}{{- if ne $ssObfs "none" }}, obfs={{ $ssObfs }}{{- end }}{{- if ne $ssObfsHost "" }}, obfs-host={{ $ssObfsHost }}{{- end }}{{- if ne (default "" $proxy.ObfsPath) "" }}, obfs-uri={{ $proxy.ObfsPath }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}, fast-open=false, udp-relay=true, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{- /* ========== vmess ========== */ -}}
+  {{- else if eq $proxyType "vmess" }}
+    {{- $vmMethod := default "none" $proxy.Method }}
+    {{- /* Transport enum from constants.ts TRANSPORTS.vmess: 'tcp','websocket','grpc' */ -}}
+    {{- /* Security enum from constants.ts SECURITY.vmess: 'none','tls' */ -}}
+    {{- $vmTransport := default "tcp" $proxy.Transport }}
+    {{- $vmSecurity := default "none" $proxy.Security }}
+    {{- $vmObfs := "" -}}
+    {{- if eq $vmTransport "websocket" -}}
+      {{- if eq $vmSecurity "tls" -}}
+        {{- $vmObfs = "wss" -}}
+      {{- else -}}
+        {{- $vmObfs = "ws" -}}
+      {{- end -}}
+    {{- else if eq $vmSecurity "tls" -}}
+      {{- $vmObfs = "over-tls" -}}
+    {{- end }}
+vmess={{ $server }}:{{ $proxy.Port }}, method={{ $vmMethod }}, password={{ $password }}{{- if ne $vmObfs "" }}, obfs={{ $vmObfs }}{{- end }}{{- if and (or (eq $vmObfs "ws") (eq $vmObfs "wss")) (ne (default "" $proxy.Path) "") }}, obfs-uri={{ $proxy.Path }}{{- end }}{{- if ne $bestHost "" }}, obfs-host={{ $bestHost }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else if ne $vmObfs "" }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{- /* ========== vless ========== */ -}}
+  {{- else if eq $proxyType "vless" }}
+    {{- /* Transport enum: 'tcp','websocket','grpc','mkcp','httpupgrade','xhttp' */ -}}
+    {{- /* Security enum: 'none','tls','reality' */ -}}
+    {{- $vlTransport := default "tcp" $proxy.Transport }}
+    {{- $vlSecurity := default "none" $proxy.Security }}
+    {{- $vlObfs := "" -}}
+    {{- if eq $vlTransport "websocket" -}}
+      {{- if or (eq $vlSecurity "tls") (eq $vlSecurity "reality") -}}
+        {{- $vlObfs = "wss" -}}
+      {{- else -}}
+        {{- $vlObfs = "ws" -}}
+      {{- end -}}
+    {{- else if or (eq $vlSecurity "tls") (eq $vlSecurity "reality") -}}
+      {{- $vlObfs = "over-tls" -}}
+    {{- end }}
+vless={{ $server }}:{{ $proxy.Port }}, method=none, password={{ $password }}{{- if ne $vlObfs "" }}, obfs={{ $vlObfs }}{{- end }}{{- if and (or (eq $vlObfs "ws") (eq $vlObfs "wss")) (ne (default "" $proxy.Path) "") }}, obfs-uri={{ $proxy.Path }}{{- end }}{{- if ne $bestHost "" }}, obfs-host={{ $bestHost }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else if ne $vlObfs "" }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}{{- if and (ne (default "" $proxy.Flow) "") (ne $proxy.Flow "none") }}, vless-flow={{ $proxy.Flow }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{- /* ========== trojan ========== */ -}}
+  {{- else if eq $proxyType "trojan" }}
+    {{- /* Transport enum: 'tcp','websocket','grpc' */ -}}
+    {{- /* Security enum: 'tls' (always tls for trojan) */ -}}
+    {{- $trTransport := default "tcp" $proxy.Transport }}
+    {{- if eq $trTransport "websocket" }}
+trojan={{ $server }}:{{ $proxy.Port }}, password={{ $password }}, obfs=wss{{- if ne (default "" $proxy.Path) "" }}, obfs-uri={{ $proxy.Path }}{{- end }}{{- if ne $bestHost "" }}, obfs-host={{ $bestHost }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+    {{- else }}
+trojan={{ $server }}:{{ $proxy.Port }}, password={{ $password }}, over-tls=true{{- if ne $bestSni "" }}, tls-host={{ $bestSni }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+    {{- end }}
+  {{- /* ========== anytls ========== */ -}}
+  {{- else if eq $proxyType "anytls" }}
+    {{- /* Security enum: 'tls' (always tls for anytls) */ -}}
+anytls={{ $server }}:{{ $proxy.Port }}, password={{ $password }}, over-tls=true{{- if ne $bestSni "" }}, tls-host={{ $bestSni }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}, fast-open=false, udp-relay=true, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{- /* ========== http (supports TLS via over-tls) ========== */ -}}
+  {{- else if eq $proxyType "http" }}
+    {{- /* Security enum: 'none','tls' */ -}}
+    {{- $httpSecurity := default "none" $proxy.Security }}
+http={{ $server }}:{{ $proxy.Port }}{{- if ne $password "" }}, password={{ $password }}{{- end }}{{- if eq $httpSecurity "tls" }}, over-tls=true{{- if ne $bestSni "" }}, tls-host={{ $bestSni }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{- /* ========== socks (supports TLS via over-tls) ========== */ -}}
+  {{- else if eq $proxyType "socks" }}
+    {{- /* socks has no security/transport in schema; TLS detected via Security field */ -}}
+    {{- $socksSecurity := default "none" $proxy.Security }}
+socks5={{ $server }}:{{ $proxy.Port }}{{- if ne $password "" }}, password={{ $password }}{{- end }}{{- if eq $socksSecurity "tls" }}, over-tls=true{{- if ne $bestSni "" }}, tls-host={{ $bestSni }}{{- end }}{{- if $SkipVerify }}, tls-verification=false{{- else }}, tls-verification=true{{- end }}{{- if ne (default "" $proxy.CertPinSHA256) "" }}, tls-cert-sha256={{ $proxy.CertPinSHA256 }}{{- end }}{{- if $hasReality }}, reality-base64-pubkey={{ $proxy.RealityPublicKey }}{{- if ne (default "" $proxy.RealityShortId) "" }}, reality-hex-shortid={{ $proxy.RealityShortId }}{{- end }}{{- end }}{{- end }}, fast-open=false, udp-relay=false, tag={{ $proxy.Name }}{{- "\n" -}}
+  {{ end }}
+{{ end }}

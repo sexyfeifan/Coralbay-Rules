@@ -60,6 +60,18 @@ https://rules.coralbay.top/_assets/icons/Auto.png
 
 这些图标只用于 OpenClash/Mihomo 面板展示，不参与节点测速或流量分流。图标来源：[Koolson/Qure](https://github.com/Koolson/Qure)，固定于上游提交 `b16b260625f873266f6a6a9b88710132774997b8`。
 
+## 客户端模板中心
+
+控制台提供 Perfect Panel 当前 15 类客户端模板的在线链接、复制和下载。Clash/Mihomo/OpenClash 与 Stash 标记为“666OS 增强”，直接使用本项目的 33 个 MRS 镜像；其余客户端保留 Perfect Panel 官方基础模板，因为这些客户端不原生支持 Mihomo MRS，项目不会生成不可用的伪适配。
+
+Stash 模板沿用 Perfect Panel 的节点渲染逻辑，并将规则层替换为 666OS Pro_cn 的本地 MRS providers。Stash 官方文档确认支持 `domain` 和 `ipcidr` 行为的 MRS 规则集。
+
+模板来源代码按其 MIT 许可证保存在 `templates/clients/perfect-panel/`。
+
+## 可读规则详情
+
+同步 `release` 分支 MRS 的同时，项目会同步 666OS `geo` 分支的可读源。控制台可展开 Google 等存在映射的规则并搜索全部条目；未公开对应可读源的 MRS 会明确显示“暂无公开可读源”。
+
 ## 两种部署模式
 
 ### 独立服务器

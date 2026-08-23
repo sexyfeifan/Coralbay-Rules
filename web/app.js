@@ -1,11 +1,70 @@
 const $ = id => document.getElementById(id);
-async function json(url, opt) { const r = await fetch(url, opt); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }
+async function json(url, opt) { const response = await fetch(url, opt); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); return data; }
 const short = value => value ? value.slice(0, 10) : '—';
-const size = bytes => bytes == null ? '—' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes/1024).toFixed(1)} KB` : bytes < 1073741824 ? `${(bytes/1048576).toFixed(1)} MB` : `${(bytes/1073741824).toFixed(1)} GB`;
+const size = bytes => bytes == null ? '—' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes/1024).toFixed(1)} KB` : `${(bytes/1048576).toFixed(1)} MB`;
 function setState(id, text, ok) { $(id).textContent = text; $(id).className = `value ${ok ? 'ok' : 'bad'}`; }
-async function publicStatus() { if (!$('state')) return; try { const d=await json('/api/public/status'),s=d.status||{}; setState('state',d.syncing?'同步中':'正常',true); $('commit').textContent=short(s.commit); $('files').textContent=s.validated_files??'—'; $('synced').textContent=s.synced_at||'—'; } catch { setState('state','异常',false); } }
-async function loadRules() { if (!$('ruleRows')) return; const d=await json('/api/public/rules'); $('ruleRows').innerHTML=d.rules.map(r=>`<tr><td><strong>${r.name}</strong><br><small>${r.path}</small></td><td>${r.behavior}<br><small>${r.format}</small></td><td class="${r.cached?'ok':'bad'}">${r.cached?'已缓存':'缺失'}</td><td>${size(r.bytes)}</td><td><a href="${r.original_url}" target="_blank" rel="noreferrer">原链接</a> · <a href="${r.mirror_url}" target="_blank" rel="noreferrer">镜像</a> · <a href="${r.mirror_url}" download>下载</a><details><summary>详情</summary><small>${r.detail}</small></details></td></tr>`).join(''); }
-async function loadAdmin() { try { const d=await json('/api/admin/status'),s=d.status||{},c=d.certificate||{},i=d.icons||{}; setState('adminState',d.syncing?'同步中':'正常',!d.last_error); $('adminCommit').textContent=`提交 ${short(s.commit)}`; $('runningVersion').textContent=`v${d.version}`; $('latestVersion').textContent=d.latest_version?`最新 ${d.latest_version}${d.update_available?' · 可升级':' · 已是最新'}`:'暂时无法检查最新版'; setState('certificate',c.ok?`${c.days_remaining} 天`:'异常',c.ok&&c.days_remaining>14); $('certificateIssuer').textContent=c.ok?`${c.issuer} · ${new Date(c.not_after).toLocaleDateString()}`:(c.error||'无法读取'); setState('iconCache',`${i.cached||0} / ${i.expected||27}`,i.ok); $('iconBytes').textContent=size(i.bytes); $('adminFiles').textContent=`${s.validated_files||0} / 33`; $('diskFree').textContent=size(d.disk_free_bytes); $('interval').value=String(d.interval_seconds); $('intervalHint').textContent=`当前每 ${Math.round(d.interval_seconds/3600)} 小时`; $('copyTemplate').dataset.url=d.template_url; $('updateApp').disabled=!d.update_available; $('updateApp').textContent=d.update_available?`升级到 ${d.latest_version}`:'已是最新版本'; const logs=await json('/api/admin/logs'); $('logs').textContent=(logs.logs||[]).join('\n')||'暂无本次运行日志'; const releases=await json('/api/admin/releases'); $('releases').innerHTML=(releases.releases||[]).map(r=>`<div class="release"><code>${short(r.commit)} ${r.active?'（当前）':''}</code>${r.active?'':`<button data-rollback="${r.commit}" class="secondary">回滚</button>`}</div>`).join('')||'暂无历史版本'; document.querySelectorAll('[data-rollback]').forEach(b=>b.onclick=()=>rollback(b.dataset.rollback)); } catch(e) { $('message').textContent=e.message; } }
-async function rollback(commit) { if(!confirm(`确认回滚到 ${short(commit)}？`))return; await json('/api/admin/rollback',{method:'POST',headers:{'Content-Type':'application/json','X-CoralBay-Action':'console'},body:JSON.stringify({commit})}); $('message').textContent='回滚完成'; loadAdmin(); }
-if ($('sync')) { $('sync').onclick=async()=>{try{await json('/api/admin/sync',{method:'POST',headers:{'X-CoralBay-Action':'console'}});$('message').textContent='同步已启动';setTimeout(loadAdmin,1500)}catch(e){$('message').textContent=e.message}}; $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:{'X-CoralBay-Action':'console'}});$('message').textContent='更新器已启动，请约一分钟后刷新页面'}; $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json','X-CoralBay-Action':'console'},body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()}; $('copyTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyTemplate').dataset.url);$('message').textContent='模板链接已复制'}; $('refresh').onclick=()=>{loadAdmin();loadRules()}; $('ruleCard').onclick=()=>$('ruleSection').scrollIntoView({behavior:'smooth'}); loadAdmin(); loadRules(); }
+
+async function publicStatus() {
+  if (!$('state')) return;
+  try { const data=await json('/api/public/status'), status=data.status||{}; setState('state',data.syncing?'同步中':'正常',true); $('commit').textContent=short(status.commit); $('files').textContent=status.validated_files??'—'; $('synced').textContent=status.synced_at||'—'; }
+  catch { setState('state','异常',false); }
+}
+
+let detailItems = [];
+async function showRuleDetails(path, name) {
+  try {
+    const data = await json(`/api/public/rule-details?path=${encodeURIComponent(path)}`);
+    detailItems = data.entries || []; $('detailTitle').textContent = `${name} 规则详情`;
+    $('detailMeta').textContent = `${data.count} 条 · ${data.source_path}`; $('detailSearch').value = '';
+    $('detailEntries').textContent = detailItems.join('\n'); $('detailPanel').classList.remove('hidden');
+    $('detailPanel').scrollIntoView({behavior:'smooth'});
+  } catch (error) { $('message').textContent = error.message; }
+}
+
+async function loadRules() {
+  if (!$('ruleRows')) return;
+  const data = await json('/api/public/rules');
+  $('ruleRows').innerHTML = data.rules.map(rule => `<tr><td><div class="rule-name"><img src="${rule.icon_url}" alt=""><div><strong>${rule.name}</strong><br><small>${rule.path}</small></div></div></td><td>${rule.behavior}<br><small>${rule.format}</small></td><td class="${rule.cached?'ok':'bad'}">${rule.cached?'已缓存':'缺失'}</td><td>${size(rule.bytes)}</td><td><a href="${rule.original_url}" target="_blank" rel="noreferrer">原链接</a> · <a href="${rule.mirror_url}" target="_blank" rel="noreferrer">镜像</a> · <a href="${rule.mirror_url}" download>下载</a>${rule.readable?` · <button class="link-button" data-detail="${rule.path}" data-name="${rule.name}">查看条目</button>`:`<br><small class="muted">暂无公开可读源</small>`}</td></tr>`).join('');
+  document.querySelectorAll('[data-detail]').forEach(button => button.onclick = () => showRuleDetails(button.dataset.detail, button.dataset.name));
+}
+
+let templateItems = [];
+function selectTemplate() {
+  const selected = templateItems.find(item => item.id === $('clientTemplate').value); if (!selected) return;
+  $('downloadClientTemplate').href = selected.download_url;
+  $('downloadClientTemplate').textContent = `下载 .${selected.extension}`;
+  $('copyClientTemplate').dataset.url = selected.online_url;
+  $('clientTemplateHint').textContent = `${selected.enhanced?'666OS 增强 · ':'官方基础 · '}${selected.description}`;
+}
+async function loadTemplates() {
+  const data = await json('/api/public/templates'); templateItems = data.templates || [];
+  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${item.id}">${item.name}${item.enhanced?'（666OS 增强）':''}</option>`).join('');
+  selectTemplate();
+}
+
+async function loadAdmin() {
+  try {
+    const data=await json('/api/admin/status'), status=data.status||{}, certificate=data.certificate||{}, icons=data.icons||{};
+    setState('adminState',data.syncing?'同步中':'正常',!data.last_error); $('adminCommit').textContent=`提交 ${short(status.commit)}`;
+    $('runningVersion').textContent=`v${data.version}`; $('latestVersion').textContent=data.latest_version?`最新 ${data.latest_version}${data.update_available?' · 可升级':' · 已是最新'}`:'暂时无法检查最新版';
+    setState('certificate',certificate.ok?`${certificate.days_remaining} 天`:'异常',certificate.ok&&certificate.days_remaining>14); $('certificateIssuer').textContent=certificate.ok?`${certificate.issuer} · ${new Date(certificate.not_after).toLocaleDateString()}`:(certificate.error||'无法读取');
+    setState('iconCache',`${icons.cached||0} / ${icons.expected||27}`,icons.ok); $('iconBytes').textContent=size(icons.bytes); $('adminFiles').textContent=`${status.validated_files||0} / 33`;
+    $('interval').value=String(data.interval_seconds); $('intervalHint').textContent=`当前每 ${Math.round(data.interval_seconds/3600)} 小时`;
+    $('updateApp').disabled=!data.update_available; $('updateApp').textContent=data.update_available?`升级到 ${data.latest_version}`:'已是最新版本';
+    const logs=await json('/api/admin/logs'); $('logs').textContent=(logs.logs||[]).join('\n')||'暂无本次运行日志';
+    const releases=await json('/api/admin/releases'); $('releases').innerHTML=(releases.releases||[]).map(item=>`<div class="release"><code>${short(item.commit)} ${item.active?'（当前）':''}</code>${item.active?'':`<button data-rollback="${item.commit}" class="secondary">回滚</button>`}</div>`).join('')||'暂无历史版本';
+    document.querySelectorAll('[data-rollback]').forEach(button=>button.onclick=()=>rollback(button.dataset.rollback));
+  } catch(error) { $('message').textContent=error.message; }
+}
+async function rollback(commit) { if(!confirm(`确认回滚到 ${short(commit)}？`)) return; await json('/api/admin/rollback',{method:'POST',headers:{'Content-Type':'application/json','X-CoralBay-Action':'console'},body:JSON.stringify({commit})}); $('message').textContent='回滚完成'; loadAdmin(); }
+
+if ($('sync')) {
+  $('sync').onclick=async()=>{try{await json('/api/admin/sync',{method:'POST',headers:{'X-CoralBay-Action':'console'}});$('message').textContent='同步已启动';setTimeout(()=>{loadAdmin();loadRules();loadTemplates()},1500)}catch(error){$('message').textContent=error.message}};
+  $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:{'X-CoralBay-Action':'console'}});$('message').textContent='更新器已启动，请约一分钟后刷新页面'};
+  $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json','X-CoralBay-Action':'console'},body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()};
+  $('refresh').onclick=()=>{loadAdmin();loadRules();loadTemplates()}; $('ruleCard').onclick=()=>$('ruleSection').scrollIntoView({behavior:'smooth'});
+  $('clientTemplate').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
+  $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{const query=$('detailSearch').value.toLowerCase();$('detailEntries').textContent=detailItems.filter(item=>item.toLowerCase().includes(query)).join('\n')};
+  loadAdmin(); loadRules(); loadTemplates();
+}
 publicStatus();

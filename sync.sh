@@ -31,13 +31,19 @@ validate_release() {
 sync_once() {
   mkdir -p /data/releases
   staging="/data/.staging.$$"
+  geo_staging="/data/.geo-staging.$$"
   rm -rf "$staging"
-  trap 'rm -rf "$staging"' EXIT INT TERM
+  rm -rf "$geo_staging"
+  trap 'rm -rf "$staging" "$geo_staging"' EXIT INT TERM
 
   log "开始同步 $repository ($branch)"
   git clone --quiet --depth 1 --single-branch --branch "$branch" "$repository" "$staging"
   commit="$(git -C "$staging" rev-parse HEAD)"
   validate_release "$staging"
+
+  log "开始同步可读规则源 ($repository geo)"
+  git clone --quiet --depth 1 --single-branch --branch geo "$repository" "$geo_staging"
+  geo_commit="$(git -C "$geo_staging" rev-parse HEAD)"
 
   release_dir="/data/releases/$commit"
   if [ ! -d "$release_dir" ]; then
@@ -49,9 +55,13 @@ sync_once() {
 
   # Regenerate deployment-specific files even if the upstream commit is the
   # same, so image upgrades and domain changes take effect immediately.
-  mkdir -p "$release_dir/_mirror" "$release_dir/_templates" "$release_dir/_assets"
+  mkdir -p "$release_dir/_mirror" "$release_dir/_templates/clients" "$release_dir/_assets" "$release_dir/_sources"
   rm -rf "$release_dir/_assets/icons"
   cp -R /app/assets/icons "$release_dir/_assets/icons"
+  rm -rf "$release_dir/_sources/geo"
+  mkdir -p "$release_dir/_sources/geo"
+  cp -R "$geo_staging/site" "$geo_staging/ip" "$release_dir/_sources/geo/"
+  cp "$geo_staging/LICENSE.txt" "$release_dir/_sources/geo/LICENSE.txt"
   rules_base_url="https://$mirror_domain/"
   assets_base_url="https://$mirror_domain/_assets/icons/"
   sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
@@ -60,8 +70,60 @@ sync_once() {
     > "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next"
   mv -f "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next" \
     "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl"
+
+  # Template center: preserve every Perfect Panel client template locally.
+  for source_template in /app/templates/clients/perfect-panel/*.gotmpl; do
+    client="$(basename "$source_template" .gotmpl)"
+    [ "$client" = "clash" ] && continue
+    [ "$client" = "stash" ] && continue
+    sed "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
+      "$source_template" > "$release_dir/_templates/clients/$client.gotmpl.next"
+    mv -f "$release_dir/_templates/clients/$client.gotmpl.next" "$release_dir/_templates/clients/$client.gotmpl"
+  done
+  cp "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$release_dir/_templates/clients/clash.gotmpl"
+
+  # Stash supports MRS domain/ipcidr providers. Keep Perfect Panel's node
+  # renderer and policy groups, then replace its rule layer with 666OS Pro_cn.
+  awk '/^rules:/{exit} {print}' /app/templates/clients/perfect-panel/stash.gotmpl \
+    > "$release_dir/_templates/clients/stash.gotmpl.next"
+  printf '  - { name: "🛑 Advertising", type: select, proxies: [REJECT-DROP, REJECT, 🎯 Direct] }\n\nrules:\n' \
+    >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  while IFS= read -r relative_path; do
+    [ -n "$relative_path" ] || continue
+    base="$(basename "$relative_path" .mrs)"
+    suffix=""
+    [ "${relative_path#mihomo/ip/}" != "$relative_path" ] && suffix="IP"
+    provider="${base}${suffix}"
+    case "$base" in
+      Tracking|Advertising) target="🛑 Advertising" ;;
+      Private) target="🎯 Direct" ;;
+      Apple) target="🍎 Apple" ;;
+      Telegram) target="📟 Telegram" ;;
+      AI) target="🤖 AI" ;;
+      Netflix|Disney|Emby|Streaming|YouTube|Spotify) target="📺 GlobalMedia" ;;
+      Games) target="🎮 Game" ;;
+      Crypto) target="🪙 Crypto" ;;
+      Google) target="🔍 Google" ;;
+      Microsoft) target="🪟 Microsoft" ;;
+      China) target="🇨🇳 China" ;;
+      *) target="🚀 Proxy" ;;
+    esac
+    printf '  - RULE-SET,%s,%s\n' "$provider" "$target" >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  done < "$expected_file"
+  printf '  - MATCH,🐠 Final\n\nrule-providers:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  while IFS= read -r relative_path; do
+    [ -n "$relative_path" ] || continue
+    base="$(basename "$relative_path" .mrs)"
+    behavior="domain"; suffix=""
+    if [ "${relative_path#mihomo/ip/}" != "$relative_path" ]; then behavior="ipcidr"; suffix="IP"; fi
+    provider="${base}${suffix}"
+    printf '  %s: { type: http, behavior: %s, format: mrs, path: ./rules/%s.mrs, url: %s%s, interval: 86400 }\n' \
+      "$provider" "$behavior" "$provider" "$rules_base_url" "$relative_path" \
+      >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  done < "$expected_file"
+  mv -f "$release_dir/_templates/clients/stash.gotmpl.next" "$release_dir/_templates/clients/stash.gotmpl"
   cat > "$release_dir/_mirror/status.json.next" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
 EOF
   mv -f "$release_dir/_mirror/status.json.next" "$release_dir/_mirror/status.json"
   cat > "$release_dir/index.html.next" <<EOF
