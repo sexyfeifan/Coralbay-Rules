@@ -19,7 +19,7 @@ Docker Hub：`sexyfeifan/coralbay-rules:latest`
 服务器需要预先安装 Docker Engine 和 Docker Compose 插件。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh | sudo bash
+curl -fsSL "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" | sudo bash
 ```
 
 运行后显示中文管理菜单：

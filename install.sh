@@ -85,7 +85,7 @@ load_env() {
 install_manager_command() {
   local temp_script
   temp_script="$(mktemp /tmp/coralbay-rules-manager.XXXXXX)"
-  if curl -fsSL --retry 3 --connect-timeout 15 "$MANAGER_URL" -o "$temp_script"; then
+  if curl -fsSL --retry 3 --connect-timeout 15 "${MANAGER_URL}?t=$(date +%s)" -o "$temp_script"; then
     install -d -m 0755 "$(dirname "$MANAGER_PATH")"
     install -m 0755 "$temp_script" "$MANAGER_PATH"
     ln -sfn "$MANAGER_PATH" /usr/local/bin/rules
@@ -362,7 +362,16 @@ EOF
   done
 }
 
-case "${1:-menu}" in
+action="${1:-}"
+if [[ -z "$action" ]]; then
+  if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "/dev/stdin" ]]; then
+    action="install"
+  else
+    action="menu"
+  fi
+fi
+
+case "$action" in
   menu) menu ;;
   install) install_service ;;
   status) service_status ;;
