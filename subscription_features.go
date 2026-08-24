@@ -48,14 +48,15 @@ type subscriptionRequest struct {
 }
 
 type subscriptionHistoryItem struct {
-	ID          string    `json:"id"`
-	CreatedAt   time.Time `json:"created_at"`
-	Target      string    `json:"target"`
-	Filename    string    `json:"filename"`
-	NodeCount   int       `json:"node_count"`
-	SourceCount int       `json:"source_count"`
-	URL         string    `json:"url"`
-	Config      string    `json:"config,omitempty"`
+	ID          string               `json:"id"`
+	CreatedAt   time.Time            `json:"created_at"`
+	Target      string               `json:"target"`
+	Filename    string               `json:"filename"`
+	NodeCount   int                  `json:"node_count"`
+	SourceCount int                  `json:"source_count"`
+	URL         string               `json:"url"`
+	Config      string               `json:"config,omitempty"`
+	Settings    *subscriptionRequest `json:"settings,omitempty"`
 }
 
 func (s *server) subscriptionCapabilities(w http.ResponseWriter, _ *http.Request) {
@@ -181,7 +182,7 @@ func (s *server) createSubscriptionLinkV2(w http.ResponseWriter, r *http.Request
 	}
 	canonical := params.Encode()
 	link := "https://" + s.domain + "/sub?" + canonical + "&sig=" + url.QueryEscape(s.sign(canonical))
-	item := subscriptionHistoryItem{CreatedAt: time.Now().UTC(), Target: body.Target, Filename: body.Filename, NodeCount: nodes, SourceCount: len(strings.Split(body.URL, "|")), URL: link, Config: body.Config}
+	item := subscriptionHistoryItem{CreatedAt: time.Now().UTC(), Target: body.Target, Filename: body.Filename, NodeCount: nodes, SourceCount: len(strings.Split(body.URL, "|")), URL: link, Config: body.Config, Settings: &body}
 	sum := sha256.Sum256([]byte(link + item.CreatedAt.String()))
 	item.ID = hex.EncodeToString(sum[:6])
 	s.appendSubscriptionHistory(item)
@@ -235,6 +236,40 @@ func (s *server) clearSubscriptionHistory(w http.ResponseWriter, _ *http.Request
 		return
 	}
 	s.audit("subscription-history", "cleared", "all")
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) deleteSubscriptionHistory(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" || len(id) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "历史记录 ID 无效"})
+		return
+	}
+	s.mu.Lock()
+	items := s.readSubscriptionHistory()
+	kept := make([]subscriptionHistoryItem, 0, len(items))
+	found := false
+	for _, item := range items {
+		if item.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if found {
+		_ = os.MkdirAll(filepath.Dir(s.historyPath()), 0700)
+		content, _ := json.MarshalIndent(kept, "", "  ")
+		tmp := s.historyPath() + ".tmp"
+		if err := os.WriteFile(tmp, content, 0600); err == nil {
+			_ = os.Rename(tmp, s.historyPath())
+		}
+	}
+	s.mu.Unlock()
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "历史记录不存在"})
+		return
+	}
+	s.audit("subscription-history", "deleted", id)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

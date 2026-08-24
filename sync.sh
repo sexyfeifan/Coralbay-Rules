@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.6.0}"
+generator_version="${GENERATOR_VERSION:-4.7.0}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -69,7 +69,7 @@ sync_once() {
 
   # Regenerate deployment-specific files even if the upstream commit is the
   # same, so image upgrades and domain changes take effect immediately.
-  mkdir -p "$build_dir/_mirror" "$build_dir/_templates/clients" "$build_dir/_assets" "$build_dir/_sources"
+  mkdir -p "$build_dir/_mirror" "$build_dir/_templates/clients/original" "$build_dir/_assets" "$build_dir/_sources"
   cp -R /app/assets/icons "$build_dir/_assets/icons"
   mkdir -p "$build_dir/_sources/geo"
   cp -R "$geo_staging/site" "$geo_staging/ip" "$build_dir/_sources/geo/"
@@ -115,6 +115,7 @@ sync_once() {
   # Template center: preserve every Perfect Panel client template locally.
   for source_template in /app/templates/clients/perfect-panel/*.gotmpl; do
     client="$(basename "$source_template" .gotmpl)"
+    cp "$source_template" "$build_dir/_templates/clients/original/$client.gotmpl"
     [ "$client" = "clash" ] && continue
     [ "$client" = "stash" ] && continue
     sed "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
@@ -122,6 +123,10 @@ sync_once() {
     mv -f "$build_dir/_templates/clients/$client.gotmpl.next" "$build_dir/_templates/clients/$client.gotmpl"
   done
   cp "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$build_dir/_templates/clients/clash.gotmpl"
+  cp "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$build_dir/_templates/clients/mihomo.gotmpl"
+  cp "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$build_dir/_templates/clients/openclash.gotmpl"
+  cp /app/templates/clients/perfect-panel/clash.gotmpl "$build_dir/_templates/clients/original/mihomo.gotmpl"
+  cp /app/templates/clients/perfect-panel/clash.gotmpl "$build_dir/_templates/clients/original/openclash.gotmpl"
 
   # Keep Perfect Panel's node renderer, then map the complete 666OS Pro_cn
   # policy group and MRS rule layers to Stash-native fields.

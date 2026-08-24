@@ -213,7 +213,7 @@ func TestClientTemplateMetadata(t *testing.T) {
 			t.Fatalf("enhanced flag and capability disagree for %s", client.ID)
 		}
 	}
-	if len(clientTemplates) != 15 {
-		t.Fatalf("got %d client templates, want 15", len(clientTemplates))
+	if len(clientTemplates) != 17 {
+		t.Fatalf("got %d client templates, want 17", len(clientTemplates))
 	}
 }

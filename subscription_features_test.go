@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -65,5 +68,52 @@ func TestPPanelAndSubscriptionEntrancesStaySeparate(t *testing.T) {
 		if !strings.Contains(text, marker) {
 			t.Errorf("missing separate entrance marker %q", marker)
 		}
+	}
+}
+
+func TestTemplateVariantsAndHistoryControlsArePresent(t *testing.T) {
+	content, err := os.ReadFile("web/admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, marker := range []string{`id="templateVariant"`, `Perfect Panel 原始版`, `设置项目`, `复用或单独删除`} {
+		if !strings.Contains(text, marker) {
+			t.Errorf("missing UI marker %q", marker)
+		}
+	}
+	for _, id := range []string{"clash", "mihomo", "openclash"} {
+		found := false
+		for _, client := range clientTemplates {
+			found = found || client.ID == id
+		}
+		if !found {
+			t.Errorf("missing split template %q", id)
+		}
+	}
+}
+
+func TestDeleteSingleSubscriptionHistory(t *testing.T) {
+	s := &server{dataDir: t.TempDir()}
+	s.appendSubscriptionHistory(subscriptionHistoryItem{ID: "keep", Target: "clash"})
+	s.appendSubscriptionHistory(subscriptionHistoryItem{ID: "delete", Target: "surge", Settings: &subscriptionRequest{Target: "surge", Interval: 12, Emoji: true}})
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/subscription-history/delete", nil)
+	req.SetPathValue("id", "delete")
+	recorder := httptest.NewRecorder()
+	s.deleteSubscriptionHistory(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	items := s.readSubscriptionHistory()
+	if len(items) != 1 || items[0].ID != "keep" {
+		t.Fatalf("unexpected history after delete: %+v", items)
+	}
+	content, err := os.ReadFile(s.historyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted []subscriptionHistoryItem
+	if json.Unmarshal(content, &persisted) != nil || len(persisted) != 1 {
+		t.Fatalf("invalid persisted history: %s", content)
 	}
 }

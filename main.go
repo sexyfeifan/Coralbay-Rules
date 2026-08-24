@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.6.0"
+var version = "4.7.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -87,7 +87,9 @@ type clientTemplate struct {
 }
 
 var clientTemplates = []clientTemplate{
-	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "adapted", "666OS Pro_cn：33 个本地 MRS 规则与本地图标", "Clash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
+	{"clash", "Clash", "yaml", true, "adapted", "Clash YAML：666OS Pro_cn 分组、33 个本地 MRS 规则与本地图标", "Clash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
+	{"mihomo", "Mihomo", "yaml", true, "adapted", "Mihomo 原生配置：666OS Pro_cn 分组、MRS 规则与本地图标", "Mihomo", "Mihomo", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
+	{"openclash", "OpenClash", "yaml", true, "adapted", "OpenClash 配置：666OS Pro_cn 分组、MRS 规则与本地图标", "OpenClash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
 	{"stash", "Stash", "yaml", true, "adapted", "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则", "Stash", "Stash", "yaml", "stash://install-config?url=${encodeURIComponent(url)}"},
 	{"surge", "Surge", "conf", true, "adapted", "已生成 666OS Geo 原生 RULE-SET，并映射 Pro_cn 策略分组", "Surge", "Surge", "conf", "surge:///install-config?url=${encodeURIComponent(url)}"},
 	{"loon", "Loon", "conf", true, "adapted", "完整配置：必须作为远程配置导入（不是节点订阅）；包含官方节点语法、Pro_cn 地区筛选/测速组与 666OS 远程规则", "Loon", "Loon", "conf", "loon://import?sub=${encodeURIComponent(url)}"},
@@ -176,6 +178,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/subscription-capabilities", s.auth(s.subscriptionCapabilities))
 	mux.HandleFunc("GET /api/admin/subscription-history", s.auth(s.subscriptionHistory))
 	mux.HandleFunc("DELETE /api/admin/subscription-history", s.auth(s.clearSubscriptionHistory))
+	mux.HandleFunc("DELETE /api/admin/subscription-history/{id}", s.auth(s.deleteSubscriptionHistory))
 	mux.HandleFunc("POST /api/admin/subscription-parse", s.auth(s.parseSubscriptionLink))
 	mux.HandleFunc("GET /api/admin/subscription-qr", s.auth(s.subscriptionQRCode))
 	mux.HandleFunc("GET /sub", s.signedSubscription)
@@ -274,9 +277,11 @@ func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
 			"enhanced": client.Enhanced, "capability": client.Capability, "description": client.Description,
 			"ppanel_name": client.PPanelName, "user_agent": client.UserAgent,
 			"output_format": client.OutputFormat, "url_scheme": client.URLScheme,
-			"online_url":     "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
-			"download_url":   "/downloads/templates/" + client.ID,
-			"node_rendering": true, "policy_groups": policy, "rule_sources": rules,
+			"online_url":            "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
+			"download_url":          "/downloads/templates/" + client.ID,
+			"original_url":          "https://" + s.domain + "/_templates/clients/original/" + client.ID + ".gotmpl",
+			"original_download_url": "/downloads/templates/" + client.ID + "?variant=original",
+			"node_rendering":        true, "policy_groups": policy, "rule_sources": rules,
 			"validation": validation,
 		})
 	}
@@ -1218,7 +1223,13 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
-	path := filepath.Join(s.dataDir, "current", "_templates", "clients", selected.ID+".gotmpl")
+	variant := "adapted"
+	pathParts := []string{s.dataDir, "current", "_templates", "clients", selected.ID + ".gotmpl"}
+	if r.URL.Query().Get("variant") == "original" {
+		variant = "original"
+		pathParts = []string{s.dataDir, "current", "_templates", "clients", "original", selected.ID + ".gotmpl"}
+	}
+	path := filepath.Join(pathParts...)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		http.NotFound(w, r)
@@ -1231,7 +1242,7 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 	if selected.Extension == "json" {
 		contentType = "application/json; charset=utf-8"
 	}
-	filename := "CoralBay_PPanel_" + strings.ReplaceAll(selected.ID, "-", "_") + "." + selected.Extension
+	filename := "CoralBay_PPanel_" + strings.ReplaceAll(selected.ID, "-", "_") + "_" + variant + "." + selected.Extension
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
