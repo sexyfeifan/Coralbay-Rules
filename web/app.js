@@ -23,7 +23,7 @@ function prepareTabs() {
   };
   document.querySelectorAll('.panel.section-space').forEach(panel => {
     if (panel.querySelector('#conversionRows')) groups.rules.push(panel);
-    if (panel.querySelector('a[href="/_templates/MihomoPro_overwrite.conf"]')) groups.subscription.push(panel);
+    if (panel.querySelector('a[href="/_templates/MihomoPro_overwrite.conf"]')) groups.templates.push(panel);
   });
   Object.entries(groups).forEach(([name, selectors]) => selectors.forEach(selector => {
     const panel = typeof selector === 'string' ? document.querySelector(selector) : selector;
@@ -112,15 +112,30 @@ async function loadNative(){const data=await json('/api/public/native-rules');na
 
 const targetCompatibility = {
   clash: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
+  clashr: ['warning','旧版 ClashR 格式，不支持现代 VLESS Reality 等节点。'],
   singbox: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
   surge: ['warning','Surge 无法表达 VLESS Reality。若订阅全部是 VLESS，验证会拒绝生成空配置。'],
   shadowrocket: ['ok','支持当前 VLESS Reality 节点；不支持的协议会由后端过滤并报告。'],
   quanx: ['ok','支持当前 VLESS Reality 节点；部分新协议可能无法输出。'],
   loon: ['ok','支持当前 VLESS Reality 节点，生成的是完整 Loon 配置。'],
+  surfboard: ['warning','Surfboard 协议能力有限，现代节点可能被过滤。'],
+  quan: ['warning','Quantumult 旧版格式能力有限，建议优先使用 Quantumult X。'],
+  ss: ['warning','只输出 Shadowsocks 节点，其他协议会被过滤。'],
+  ssr: ['warning','只输出 ShadowsocksR 节点，其他协议会被过滤。'],
+  trojan: ['warning','只输出 Trojan 节点，其他协议会被过滤。'],
+  mixed: ['ok','输出可用的混合 URI；不包含策略组和规则。'],
   v2ray: ['ok','输出 Base64 节点链接，不包含策略组与规则。']
 };
-function updateSubCompatibility(){const [state,text]=targetCompatibility[$('subTarget').value]||['warning','请先选择目标客户端'];$('subCompatibility').className=`template-note compatibility-${state}`;$('subCompatibility').textContent=text}
+function updateSubCompatibility(){const target=$('subTarget').value,[state,text]=targetCompatibility[target]||['warning','请先选择目标客户端'];$('subCompatibility').className=`template-note compatibility-${state}`;$('subCompatibility').textContent=text;$('subSurgeFields').classList.toggle('hidden',target!=='surge');$('subDeviceFields').classList.toggle('hidden',target!=='quanx')}
 async function loadSubconverterStatus(){try{const data=await json('/api/admin/subconverter/status');$('subBackendState').textContent=data.ok?`本机后端 · ${data.version}`:'后端异常';$('subBackendState').classList.toggle('bad',!data.ok)}catch(error){$('subBackendState').textContent='后端不可用';$('subBackendState').classList.add('bad')}}
+
+let subscriptionPresets=[];
+async function loadSubscriptionPresets(){const data=await json('/api/admin/subscription-presets');subscriptionPresets=data.presets||[];$('subPreset').innerHTML=subscriptionPresets.map(item=>`<option value="${escapeHTML(item.id)}">${escapeHTML(item.group)} · ${escapeHTML(item.name)}</option>`).join('');$('subPreset').onchange=()=>{const preset=subscriptionPresets.find(item=>item.id===$('subPreset').value);if(preset)$('subConfig').value=preset.url||''}}
+async function loadSubscriptionCapabilities(){const data=await json('/api/admin/subscription-capabilities');const modern=(data.targets||[]).filter(item=>item.modern).length;$('subCapabilities').textContent=`${(data.targets||[]).length} 种输出 · ${modern} 种现代协议`;}
+async function loadSubscriptionHistory(){const data=await json('/api/admin/subscription-history'),items=data.history||[];$('subHistoryRows').innerHTML=items.map(item=>`<tr><td>${new Date(item.created_at).toLocaleString('zh-CN',{hour12:false})}</td><td><strong>${escapeHTML(item.target)}</strong><br><small>${escapeHTML(item.filename||'未命名')}</small></td><td>${item.node_count}</td><td><small>${item.config?'远程配置':'仅节点转换'}</small></td><td><button class="link-button" data-history-copy="${escapeHTML(item.url)}">复制</button> · <a href="${escapeHTML(item.url)}" target="_blank" rel="noreferrer">打开</a></td></tr>`).join('')||'<tr><td colspan="5" class="muted">暂无生成记录</td></tr>';document.querySelectorAll('[data-history-copy]').forEach(button=>button.onclick=async()=>{await navigator.clipboard.writeText(button.dataset.historyCopy);$('message').textContent='历史订阅链接已复制'})}
+function subscriptionPayload(){return{target:$('subTarget').value,url:$('subURLs').value.split(/[\n|]+/).map(value=>value.trim()).filter(Boolean).join('|'),config:$('subConfig').value.trim(),filename:$('subFilename').value.trim(),include:$('subInclude').value.trim(),exclude:$('subExclude').value.trim(),rename:$('subRename').value.trim(),dev_id:$('subDeviceID').value.trim(),surge_version:Number($('subSurgeVersion').value)||4,interval:Number($('subInterval').value)||24,emoji:$('subEmoji').checked,sort:$('subSort').checked,dedup:$('subDedup').checked,udp:$('subUDP').checked,xudp:$('subXUDP').checked,tfo:$('subTFO').checked,scv:$('subSCV').checked,tls13:$('subTLS13').checked,append_type:$('subAppendType').checked,list:$('subListOnly').checked,insert:$('subInsert').checked,expand:$('subExpand').checked,new_name:$('subNewName').checked,fdn:$('subFDN').checked,clash_doh:$('subClashDoH').checked,surge_doh:$('subSurgeDoH').checked,singbox_ipv6:$('subSingboxIPv6').checked}}
+function firstParam(params,key){const value=params[key];return Array.isArray(value)?(value[0]||''):value||''}
+function applyParsedSubscription(params){const text=(key,id)=>{if($(id))$(id).value=firstParam(params,key)},check=(key,id)=>{if($(id))$(id).checked=firstParam(params,key)==='true'};text('target','subTarget');text('url','subURLs');text('config','subConfig');text('filename','subFilename');text('include','subInclude');text('exclude','subExclude');text('rename','subRename');text('dev_id','subDeviceID');const seconds=Number(firstParam(params,'interval'));if(seconds)$('subInterval').value=Math.max(1,Math.round(seconds/3600));const ver=firstParam(params,'ver');if(ver)$('subSurgeVersion').value=ver;[['emoji','subEmoji'],['sort','subSort'],['dedup','subDedup'],['udp','subUDP'],['xudp','subXUDP'],['tfo','subTFO'],['scv','subSCV'],['tls13','subTLS13'],['append_type','subAppendType'],['list','subListOnly'],['insert','subInsert'],['expand','subExpand'],['new_name','subNewName'],['fdn','subFDN'],['clash.doh','subClashDoH'],['surge.doh','subSurgeDoH']].forEach(([key,id])=>check(key,id));$('subSingboxIPv6').checked=firstParam(params,'singbox.ipv6')==='1';updateSubCompatibility()}
 
 async function loadAdmin() {
   try {
@@ -157,10 +172,12 @@ if ($('sync')) {
   $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
 	$('nativeSearch').oninput=renderNative; $('nativePlatform').onchange=renderNative;
 	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility(); loadSubconverterStatus();
-	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{const urls=$('subURLs').value.split(/[\n|]+/).map(value=>value.trim()).filter(Boolean).join('|');$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:$('subTarget').value,url:urls,config:$('subConfig').value.trim(),filename:$('subFilename').value.trim(),interval:Number($('subInterval').value)||24,emoji:$('subEmoji').checked,sort:$('subSort').checked,dedup:$('subDedup').checked,udp:$('subUDP').checked,tfo:$('subTFO').checked,scv:$('subSCV').checked,append_type:$('subAppendType').checked})});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可用节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可用节点`;feedback.classList.add('ok')}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
+	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(subscriptionPayload())});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可用节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subQR').src=`/api/admin/subscription-qr?url=${encodeURIComponent(data.url)}`;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可用节点`;feedback.classList.add('ok');loadSubscriptionHistory()}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
 	$('copySubResult').onclick=async()=>{await navigator.clipboard.writeText($('subResultURL').textContent);$('message').textContent='订阅链接已复制'};
+  $('parseSub').onclick=async()=>{try{const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('parseSubURL').value.trim()})});applyParsedSubscription(data.params||{});$('parseSubStatus').textContent=`已解析并回填 ${data.source_count} 个源订阅`;$('parseSubStatus').className='field-hint ok'}catch(error){$('parseSubStatus').textContent=`解析失败：${error.message}`;$('parseSubStatus').className='field-hint bad'}};
+  $('clearSubHistory').onclick=async()=>{if(!confirm('确认清空订阅转换历史？已生成的签名链接仍可使用。'))return;await json('/api/admin/subscription-history',{method:'DELETE'});loadSubscriptionHistory()};
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{clearTimeout(detailTimer);detailTimer=setTimeout(()=>showRuleDetails(detailPath,detailName,$('detailSearch').value),250)};
-  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
+  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus(),loadSubscriptionPresets(),loadSubscriptionCapabilities(),loadSubscriptionHistory()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
   refreshAll();
 }
 publicStatus();

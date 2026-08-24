@@ -85,7 +85,11 @@ OpenClash 的 `MihomoPro_overwrite.conf` 会在每次同步时从 666OS/YYDS 下
 
 ## 订阅链接转换
 
-Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端口。它支持 VLESS Reality、Hysteria2、TUIC、AnyTLS 等现代协议，并可输出 Clash/Mihomo、sing-box、Surge、Shadowrocket、Quantumult X、Loon 和 V2Ray。管理员输入最多 5 个 HTTP/HTTPS 订阅地址后，CoralBay 会先实际转换并检查可用节点数量，验证通过才生成 HMAC 签名的 `/sub` 地址；不兼容目标（例如全 VLESS 订阅转 Surge）会明确拒绝，不发布空配置。签名只允许转换生成时指定的来源与参数，后端仅在 Compose 内网提供服务，订阅不会发送给第三方公共转换站。
+Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端口。控制台把“PPanel 模板”和“订阅转换”设为两个独立入口：前者下载或复制 `.gotmpl` 供 PPanel 管理后台使用；后者把现有订阅转换成客户端可定期更新的签名地址，二者不能互换。
+
+订阅转换支持最多合并 5 个 HTTP/HTTPS 地址，并输出 Clash/Mihomo、ClashR、sing-box、Surge、Surfboard、Shadowrocket、Quantumult/Quantumult X、Loon、V2Ray、SS、SSR、Trojan 和混合 URI。可配置包含/排除正则、节点重命名、远程配置预设、更新间隔、Emoji、排序、去重、UDP/XUDP、TFO、TLS 1.3、证书校验、仅节点输出、规则展开、DoH 和客户端专属参数。CoralBay 会先实际转换并检查可用节点数量，验证通过才生成 HMAC 签名的 `/sub` 地址；同时提供二维码、签名链接反向解析和管理员生成历史。不兼容目标（例如全 VLESS Reality 订阅转 Surge）会明确拒绝，不发布空配置。
+
+转换后端只在 Compose 内网提供服务，订阅不会发送给公共转换站；项目不提供公共短链接，也不执行用户提交的任意 JavaScript。
 
 同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：
 

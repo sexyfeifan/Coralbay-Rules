@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.2.3"
+var version = "4.3.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -167,7 +167,13 @@ func main() {
 	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
 	mux.HandleFunc("GET /api/admin/audit", s.auth(s.getAudit))
 	mux.HandleFunc("GET /api/admin/subconverter/status", s.auth(s.subconverterStatus))
-	mux.HandleFunc("POST /api/admin/subscription-link", s.auth(s.createSubscriptionLink))
+	mux.HandleFunc("POST /api/admin/subscription-link", s.auth(s.createSubscriptionLinkV2))
+	mux.HandleFunc("GET /api/admin/subscription-presets", s.auth(s.subscriptionPresets))
+	mux.HandleFunc("GET /api/admin/subscription-capabilities", s.auth(s.subscriptionCapabilities))
+	mux.HandleFunc("GET /api/admin/subscription-history", s.auth(s.subscriptionHistory))
+	mux.HandleFunc("DELETE /api/admin/subscription-history", s.auth(s.clearSubscriptionHistory))
+	mux.HandleFunc("POST /api/admin/subscription-parse", s.auth(s.parseSubscriptionLink))
+	mux.HandleFunc("GET /api/admin/subscription-qr", s.auth(s.subscriptionQRCode))
 	mux.HandleFunc("GET /sub", s.signedSubscription)
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /downloads/templates/{client}", s.downloadClientTemplate)
@@ -337,7 +343,7 @@ func (s *server) nativeRuleCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "rules": items})
 }
 
-var allowedTargets = map[string]bool{"clash": true, "singbox": true, "surge": true, "shadowrocket": true, "quanx": true, "loon": true, "v2ray": true}
+var allowedTargets = map[string]bool{"clash": true, "clashr": true, "singbox": true, "surge": true, "surfboard": true, "shadowrocket": true, "quan": true, "quanx": true, "loon": true, "v2ray": true, "ss": true, "ssr": true, "trojan": true, "mixed": true}
 
 func validateSubscriptionURLs(raw string) error {
 	parts := strings.Split(raw, "|")
@@ -476,7 +482,7 @@ func (s *server) subconverterStatus(w http.ResponseWriter, r *http.Request) {
 func convertedNodeCount(target string, content []byte) int {
 	text := string(content)
 	section := ""
-	wanted := map[string]string{"surge": "Proxy", "shadowrocket": "Proxy", "loon": "Proxy", "quanx": "server_local"}[target]
+	wanted := map[string]string{"surge": "Proxy", "surfboard": "Proxy", "shadowrocket": "Proxy", "loon": "Proxy", "quan": "server_local", "quanx": "server_local"}[target]
 	if wanted != "" {
 		count := 0
 		for _, raw := range strings.Split(text, "\n") {
@@ -491,7 +497,7 @@ func convertedNodeCount(target string, content []byte) int {
 		}
 		return count
 	}
-	if target == "clash" {
+	if target == "clash" || target == "clashr" {
 		inProxies, count := false, 0
 		for _, line := range strings.Split(text, "\n") {
 			if line == "proxies:" {
@@ -525,7 +531,7 @@ func convertedNodeCount(target string, content []byte) int {
 		}
 		return count
 	}
-	if target == "v2ray" {
+	if target == "v2ray" || target == "ss" || target == "ssr" || target == "trojan" || target == "mixed" {
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text))
 		if err != nil {
 			return 0
@@ -569,7 +575,7 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 	if target == "clash" || target == "clashr" {
 		extension = "yaml"
 	}
-	if target == "surge" || target == "shadowrocket" || target == "quanx" || target == "loon" {
+	if target == "surge" || target == "surfboard" || target == "shadowrocket" || target == "quan" || target == "quanx" || target == "loon" {
 		extension = "conf"
 	}
 	if target == "singbox" {
