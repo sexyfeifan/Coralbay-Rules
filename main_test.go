@@ -103,7 +103,7 @@ func TestPPanelTemplateStructure(t *testing.T) {
 }
 
 func TestNativeAdaptersUseLocalPlaceholder(t *testing.T) {
-	for _, file := range []string{"surge-tail.conf", "loon-tail.conf", "surfboard-tail.conf", "egern-tail.yaml"} {
+	for _, file := range []string{"surge-tail.conf", "surfboard-tail.conf", "egern-tail.yaml"} {
 		content, err := os.ReadFile(filepath.Join("templates", "clients", "native", file))
 		if err != nil {
 			t.Fatal(err)
@@ -111,6 +111,22 @@ func TestNativeAdaptersUseLocalPlaceholder(t *testing.T) {
 		if !strings.Contains(string(content), "__NATIVE_LIST_BASE_URL__") {
 			t.Errorf("%s bypasses the local native rule mirror", file)
 		}
+	}
+}
+
+func TestLoonAdapterUsesNativeRulesAndRegionalFilters(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("templates", "clients", "native", "loon-tail.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, expected := range []string{"[Remote Filter]", "香港自动 = url-test", "广告拦截", "surge/Advertising.txt", "policy = 广告拦截", "GEOIP,CN,国内流量", "FINAL,漏网之鱼"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("Loon adapter missing %q", expected)
+		}
+	}
+	if strings.Contains(text, "{{ $proxyNames }}") {
+		t.Error("Loon groups should use Remote Filter instead of expanding every node name")
 	}
 }
 

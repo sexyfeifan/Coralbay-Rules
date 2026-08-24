@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.0.0}"
+generator_version="${GENERATOR_VERSION:-4.0.1}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -152,7 +152,7 @@ sync_once() {
 
   # Native text-rule clients share the same audited 666OS geo conversion
   # output, while retaining Perfect Panel's protocol-specific node renderer.
-  for client in surge loon surfboard; do
+  for client in surge surfboard; do
     awk '/^\[Proxy Group\]/{exit} {print}' "/app/templates/clients/perfect-panel/$client.gotmpl" \
       > "$build_dir/_templates/clients/$client.gotmpl.next"
     sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
@@ -160,6 +160,13 @@ sync_once() {
       >> "$build_dir/_templates/clients/$client.gotmpl.next"
     mv -f "$build_dir/_templates/clients/$client.gotmpl.next" "$build_dir/_templates/clients/$client.gotmpl"
   done
+  awk '/^\[Remote Filter\]/{exit} {print}' /app/templates/clients/perfect-panel/loon.gotmpl \
+    > "$build_dir/_templates/clients/loon.gotmpl.next"
+  sed -e "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
+    -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
+    /app/templates/clients/native/loon-tail.conf \
+    >> "$build_dir/_templates/clients/loon.gotmpl.next"
+  mv -f "$build_dir/_templates/clients/loon.gotmpl.next" "$build_dir/_templates/clients/loon.gotmpl"
   awk '/^policy_groups:/{exit} {print}' /app/templates/clients/perfect-panel/egern.gotmpl \
     > "$build_dir/_templates/clients/egern.gotmpl.next"
   sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
