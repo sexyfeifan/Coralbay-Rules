@@ -167,6 +167,24 @@ func TestLoonUsesRemoteConfigImportScheme(t *testing.T) {
 	t.Fatal("Loon client metadata is missing")
 }
 
+func TestLoonTemplateUsesCurrentRealitySyntax(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("templates", "clients", "perfect-panel", "loon.gotmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, expected := range []string{"transport=tcp", "public-key=", "short-id=", "over-tls=true", "sni=", "[URL Rewrite]"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("Loon template missing current syntax %q", expected)
+		}
+	}
+	for _, obsolete := range []string{"reality-public-key=", "reality-short-id=", "tls-name=", "[Rewrite]"} {
+		if strings.Contains(text, obsolete) {
+			t.Errorf("Loon template still contains obsolete syntax %q", obsolete)
+		}
+	}
+}
+
 func TestReadableSource(t *testing.T) {
 	tests := map[string]string{
 		"mihomo/domain/Google.mrs": "site/google.txt",
