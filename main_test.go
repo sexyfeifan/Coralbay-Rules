@@ -5,8 +5,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewerVersion(t *testing.T) {
@@ -34,20 +36,23 @@ func TestSecureEqual(t *testing.T) {
 	}
 }
 
-func TestAdminActionToken(t *testing.T) {
-	s := &server{authDisabled: true, actionToken: "test-token"}
+func TestAdminSession(t *testing.T) {
+	s := &server{actionToken: "test-token", adminPassword: "secret", actionTimes: make(map[string]time.Time)}
 	handler := s.auth(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	expires := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	valid := expires + "." + s.sign(expires)
 	for _, test := range []struct {
-		token string
-		want  int
-	}{{"", 401}, {"bad", 401}, {"test-token", 204}} {
+		cookie string
+		want   int
+	}{{"", 401}, {"bad", 401}, {valid, 204}} {
 		req := httptest.NewRequest(http.MethodPost, "http://example.test/action", nil)
-		req.Header.Set("X-CoralBay-Action", "console")
-		req.Header.Set("X-CoralBay-Token", test.token)
+		if test.cookie != "" {
+			req.AddCookie(&http.Cookie{Name: "coralbay_session", Value: test.cookie})
+		}
 		res := httptest.NewRecorder()
 		handler(res, req)
 		if res.Code != test.want {
-			t.Fatalf("token %q: got %d, want %d", test.token, res.Code, test.want)
+			t.Fatalf("cookie %q: got %d, want %d", test.cookie, res.Code, test.want)
 		}
 	}
 }

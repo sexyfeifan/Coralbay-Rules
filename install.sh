@@ -122,8 +122,9 @@ services:
       RULES_BRANCH: ${RULES_BRANCH}
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
-      ADMIN_AUTH_DISABLED: ${ADMIN_AUTH_DISABLED}
       ADMIN_ACTION_TOKEN: ${ADMIN_ACTION_TOKEN}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SUBCONVERTER_URL: http://subconverter:25500
       UPDATER_URL: http://updater:8080/v1/update
       UPDATER_TOKEN: ${UPDATER_TOKEN}
     labels:
@@ -138,6 +139,11 @@ services:
       start_period: 60s
     ports:
       - "127.0.0.1:${LOCAL_PORT}:8080"
+
+  subconverter:
+    image: tindy2013/subconverter:latest
+    container_name: coralbay-subconverter
+    restart: unless-stopped
 
   updater:
     image: nickfedor/watchtower:1.20.3
@@ -156,7 +162,7 @@ EOF
 
 install_service() {
   need_root; need_docker
-  local dir domain interval local_port updater_token action_token
+  local dir domain interval local_port updater_token action_token admin_password
   dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   load_env "$dir"
   domain="$(prompt_required '规则域名（例如 rules.example.com）')"
@@ -186,6 +192,7 @@ install_service() {
 
   updater_token="${UPDATER_TOKEN:-$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')}"
   action_token="${ADMIN_ACTION_TOKEN:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+  admin_password="${ADMIN_PASSWORD:-sexyfeifan}"
 
   install_manager_command
   install -d -m 0755 "$dir/data" "$dir/caddy_data" "$dir/caddy_config"
@@ -198,8 +205,8 @@ RULES_REPOSITORY=https://github.com/666OS/rules.git
 RULES_BRANCH=release
 DEPLOY_MODE=proxy
 LOCAL_PORT=$local_port
-ADMIN_AUTH_DISABLED=true
 ADMIN_ACTION_TOKEN=$action_token
+ADMIN_PASSWORD=$admin_password
 UPDATER_TOKEN=$updater_token
 EOF
   chmod 600 "$dir/.env"
@@ -221,11 +228,10 @@ EOF
   [[ "$healthy" == "true" ]] || warn "容器尚未通过健康检查，请通过 coralbay-rules logs 查看原因。"
 
   info "服务已启动，规则首次同步可能需要几十秒。"
-  info "本地首页：http://127.0.0.1:$local_port/"
-  info "本地后台：http://127.0.0.1:$local_port/admin/"
+  info "本地控制台：http://127.0.0.1:$local_port/"
   warn "请在现有 Nginx/PPanel/OpenResty 中把 $domain 反向代理到 127.0.0.1:$local_port，并在现有面板管理 HTTPS 证书。"
   info "今后在 SSH 中输入 rules 或 666 即可重新打开管理菜单。"
-  info "管理操作令牌：$action_token（仅在首次执行同步、回滚或升级时输入，浏览器会话内保存）"
+  info "控制台密码已设置；公网访问时请使用 HTTPS。"
 }
 
 service_status() {
@@ -291,6 +297,12 @@ update_service() {
     chmod 600 "$dir/.env"
     info "已为旧版本生成管理操作令牌：$ADMIN_ACTION_TOKEN"
   fi
+  if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+    ADMIN_PASSWORD=sexyfeifan
+    printf '\nADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD" >> "$dir/.env"
+    chmod 600 "$dir/.env"
+    info "旧版本已启用控制台默认密码，请登录后尽快通过命令菜单修改。"
+  fi
   # Always refresh Compose during an upgrade so older installations receive
   # newly scoped environment variables and updater hardening.
   write_compose "$dir"
@@ -299,9 +311,27 @@ update_service() {
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d
   local running_version
-  running_version="$(docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app sh -c 'curl -fsS http://127.0.0.1:8080/api/public/status' 2>/dev/null || true)"
+  running_version="$(docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app sh -c 'curl -fsS http://127.0.0.1:8080/healthz' 2>/dev/null || true)"
   info "管理脚本、Compose 配置、容器镜像和服务已经全部升级。"
   [[ -n "$running_version" ]] && printf '%s\n' "$running_version"
+}
+
+change_password() {
+  need_root; need_docker
+  local dir password
+  dir="$(prompt '安装目录' "$DEFAULT_DIR")"
+  [[ -f "$dir/.env" ]] || fail "未在 $dir 找到安装。"
+  password="$(prompt_required '新的管理员密码')"
+  [[ ${#password} -ge 8 ]] || fail "密码至少需要 8 个字符。"
+  [[ "$password" =~ ^[A-Za-z0-9._@+-]+$ ]] || fail "密码仅支持字母、数字和 . _ @ + -，避免 Compose 环境文件转义错误。"
+  if grep -q '^ADMIN_PASSWORD=' "$dir/.env"; then
+    sed -i.bak "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=$password|" "$dir/.env"
+  else
+    printf '\nADMIN_PASSWORD=%s\n' "$password" >> "$dir/.env"
+  fi
+  chmod 600 "$dir/.env"
+  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d --force-recreate app
+  info "管理员密码已更新，已有网页登录会话将失效。"
 }
 
 verify_service() {
@@ -361,6 +391,7 @@ menu() {
   8. 检测公网规则地址
   9. 卸载
  10. 查看项目信息
+ 11. 修改管理员密码
   0. 退出
 EOF
     choice="$(prompt '请选择功能' "1")"
@@ -375,6 +406,7 @@ EOF
       8) verify_service; pause_menu ;;
       9) uninstall_service; pause_menu ;;
       10) show_info; pause_menu ;;
+      11) change_password; pause_menu ;;
       0) exit 0 ;;
       *) warn "无效选项"; sleep 1 ;;
     esac

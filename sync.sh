@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-3.6.1}"
+generator_version="${GENERATOR_VERSION:-4.0.0}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -80,6 +80,10 @@ sync_once() {
   rules_base_url="https://$mirror_domain/"
   assets_base_url="https://$mirror_domain/_assets/icons/"
   native_list_base_url="https://$mirror_domain/_converted/native/list/"
+  curl -fsSL --connect-timeout 10 --max-time 30 \
+    "https://raw.githubusercontent.com/666OS/YYDS/main/mihomo/openclash/MihomoPro_overwrite.conf" \
+    -o "$build_dir/_templates/MihomoPro_overwrite.conf.next"
+  mv -f "$build_dir/_templates/MihomoPro_overwrite.conf.next" "$build_dir/_templates/MihomoPro_overwrite.conf"
   sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
     -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
     /app/templates/ppanel_openclash_pro_cn.gotmpl \

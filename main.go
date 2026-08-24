@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,28 +26,29 @@ import (
 	"time"
 )
 
-var version = "3.6.1"
+var version = "4.0.0"
 
 //go:embed web/*
 var webFS embed.FS
 
 type server struct {
-	dataDir       string
-	domain        string
-	authDisabled  bool
-	updaterURL    string
-	updaterToken  string
-	actionToken   string
-	interval      time.Duration
-	scheduleReset chan time.Duration
-	mu            sync.RWMutex
-	syncing       bool
-	lastError     string
-	logs          []string
-	job           syncJob
-	latest        releaseInfo
-	latestChecked time.Time
-	actionTimes   map[string]time.Time
+	dataDir         string
+	domain          string
+	updaterURL      string
+	updaterToken    string
+	actionToken     string
+	adminPassword   string
+	subconverterURL string
+	interval        time.Duration
+	scheduleReset   chan time.Duration
+	mu              sync.RWMutex
+	syncing         bool
+	lastError       string
+	logs            []string
+	job             syncJob
+	latest          releaseInfo
+	latestChecked   time.Time
+	actionTimes     map[string]time.Time
 }
 
 type syncJob struct {
@@ -120,15 +125,16 @@ func main() {
 		}
 	}
 	s := &server{
-		dataDir:       dataDir,
-		domain:        env("MIRROR_DOMAIN", "rules.coralbay.top"),
-		authDisabled:  strings.EqualFold(env("ADMIN_AUTH_DISABLED", "true"), "true"),
-		updaterURL:    env("UPDATER_URL", "http://updater:8080/v1/update"),
-		updaterToken:  os.Getenv("UPDATER_TOKEN"),
-		actionToken:   os.Getenv("ADMIN_ACTION_TOKEN"),
-		interval:      time.Duration(intervalSeconds) * time.Second,
-		scheduleReset: make(chan time.Duration, 1),
-		actionTimes:   make(map[string]time.Time),
+		dataDir:         dataDir,
+		domain:          env("MIRROR_DOMAIN", "rules.coralbay.top"),
+		updaterURL:      env("UPDATER_URL", "http://updater:8080/v1/update"),
+		updaterToken:    os.Getenv("UPDATER_TOKEN"),
+		actionToken:     os.Getenv("ADMIN_ACTION_TOKEN"),
+		adminPassword:   env("ADMIN_PASSWORD", "sexyfeifan"),
+		subconverterURL: env("SUBCONVERTER_URL", "http://subconverter:25500"),
+		interval:        time.Duration(intervalSeconds) * time.Second,
+		scheduleReset:   make(chan time.Duration, 1),
+		actionTimes:     make(map[string]time.Time),
 	}
 	if content, err := os.ReadFile(filepath.Join(dataDir, "activity.log")); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(content)), "\n")
@@ -140,12 +146,16 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /api/public/status", s.publicStatus)
-	mux.HandleFunc("GET /api/public/rules", s.ruleCatalog)
-	mux.HandleFunc("GET /api/public/rule-details", s.ruleDetails)
-	mux.HandleFunc("GET /api/public/templates", s.templateCatalog)
-	mux.HandleFunc("GET /api/public/conversions", s.conversionCatalog)
-	mux.HandleFunc("GET /api/public/diagnostics", s.publicDiagnostics)
+	mux.HandleFunc("POST /api/login", s.login)
+	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("GET /api/session", s.sessionStatus)
+	mux.HandleFunc("GET /api/public/status", s.auth(s.publicStatus))
+	mux.HandleFunc("GET /api/public/rules", s.auth(s.ruleCatalog))
+	mux.HandleFunc("GET /api/public/rule-details", s.auth(s.ruleDetails))
+	mux.HandleFunc("GET /api/public/templates", s.auth(s.templateCatalog))
+	mux.HandleFunc("GET /api/public/conversions", s.auth(s.conversionCatalog))
+	mux.HandleFunc("GET /api/public/native-rules", s.auth(s.nativeRuleCatalog))
+	mux.HandleFunc("GET /api/public/diagnostics", s.auth(s.publicDiagnostics))
 	mux.HandleFunc("GET /api/admin/status", s.auth(s.adminStatus))
 	mux.HandleFunc("GET /api/admin/job", s.auth(s.currentJob))
 	mux.HandleFunc("POST /api/admin/sync", s.auth(s.syncNow))
@@ -155,9 +165,11 @@ func main() {
 	mux.HandleFunc("PUT /api/admin/settings", s.auth(s.updateSettings))
 	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
 	mux.HandleFunc("GET /api/admin/audit", s.auth(s.getAudit))
+	mux.HandleFunc("POST /api/admin/subscription-link", s.auth(s.createSubscriptionLink))
+	mux.HandleFunc("GET /sub", s.signedSubscription)
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /downloads/templates/{client}", s.downloadClientTemplate)
-	mux.HandleFunc("GET /admin/", s.adminPage)
+	mux.HandleFunc("GET /admin/", s.redirectRoot)
 	mux.HandleFunc("GET /", s.publicFiles)
 
 	go s.scheduler()
@@ -290,6 +302,124 @@ func (s *server) conversionCatalog(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "sets": items})
+}
+
+func (s *server) nativeRuleCatalog(w http.ResponseWriter, _ *http.Request) {
+	type item struct {
+		Platform string `json:"platform"`
+		Path     string `json:"path"`
+		Format   string `json:"format"`
+		URL      string `json:"url"`
+		Bytes    int64  `json:"bytes"`
+	}
+	items := make([]item, 0, 256)
+	for _, platform := range []string{"mihomo", "singbox", "surge"} {
+		root := filepath.Join(s.dataDir, "current", platform)
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(filepath.Join(s.dataDir, "current"), path)
+			if relErr != nil {
+				return nil
+			}
+			info, statErr := entry.Info()
+			if statErr != nil {
+				return nil
+			}
+			ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+			items = append(items, item{Platform: platform, Path: filepath.ToSlash(rel), Format: ext, URL: "https://" + s.domain + "/" + filepath.ToSlash(rel), Bytes: info.Size()})
+			return nil
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "rules": items})
+}
+
+var allowedTargets = map[string]bool{"clash": true, "clashr": true, "quan": true, "quanx": true, "loon": true, "ss": true, "sssub": true, "ssd": true, "ssr": true, "surfboard": true, "surge": true, "v2ray": true}
+
+func validateSubscriptionURLs(raw string) error {
+	parts := strings.Split(raw, "|")
+	if len(parts) == 0 || len(parts) > 5 {
+		return fmt.Errorf("订阅地址数量必须为 1 到 5 个")
+	}
+	for _, value := range parts {
+		u, err := url.Parse(strings.TrimSpace(value))
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+			return fmt.Errorf("仅支持 HTTP/HTTPS 订阅地址")
+		}
+		ips, err := net.LookupIP(u.Hostname())
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("订阅域名无法解析")
+		}
+		for _, ip := range ips {
+			if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				return fmt.Errorf("不允许访问内网订阅地址")
+			}
+		}
+	}
+	return nil
+}
+
+func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Target string `json:"target"`
+		URL    string `json:"url"`
+		Emoji  bool   `json:"emoji"`
+		Rename bool   `json:"rename"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&body) != nil || !allowedTargets[body.Target] {
+		writeJSON(w, 400, map[string]string{"error": "转换目标无效"})
+		return
+	}
+	if err := validateSubscriptionURLs(body.URL); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	params := url.Values{"target": {body.Target}, "url": {body.URL}}
+	if body.Emoji {
+		params.Set("emoji", "true")
+	}
+	if body.Rename {
+		params.Set("rename", "true")
+	}
+	canonical := params.Encode()
+	link := "https://" + s.domain + "/sub?" + canonical + "&sig=" + url.QueryEscape(s.sign(canonical))
+	s.audit("subscription-link", "completed", body.Target)
+	writeJSON(w, http.StatusOK, map[string]string{"url": link})
+}
+
+func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
+	params := r.URL.Query()
+	signature := params.Get("sig")
+	params.Del("sig")
+	target, source := params.Get("target"), params.Get("url")
+	if !allowedTargets[target] || !secureEqual(signature, s.sign(params.Encode())) || validateSubscriptionURLs(source) != nil {
+		http.Error(w, "invalid subscription link", http.StatusForbidden)
+		return
+	}
+	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + params.Encode()
+	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	if err != nil {
+		http.Error(w, "conversion backend unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "conversion failed", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	extension := "txt"
+	if target == "clash" || target == "clashr" {
+		extension = "yaml"
+	}
+	if target == "surge" || target == "quan" || target == "quanx" || target == "loon" || target == "surfboard" {
+		extension = "conf"
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="CoralBay_Subscription_`+target+`.`+extension+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 16<<20))
 }
 
 func (s *server) publicDiagnostics(w http.ResponseWriter, _ *http.Request) {
@@ -428,7 +558,7 @@ func (s *server) adminStatus(w http.ResponseWriter, _ *http.Request) {
 		"release_url": release.URL, "certificate": cert, "icons": icons,
 		"template_url": "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
 		"job":          s.job, "next_sync_at": time.Now().Add(s.interval),
-		"security": map[string]any{"action_token_required": s.actionToken != "", "public_read_only": true},
+		"security": map[string]any{"password_login": true, "session_hours": 12, "public_console": false},
 	}
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, response)
@@ -446,30 +576,71 @@ func (s *server) readStatus() (mirrorStatus, error) {
 
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.authDisabled {
-			if r.Method != http.MethodGet {
-				if r.Header.Get("X-CoralBay-Action") != "console" {
-					writeJSON(w, http.StatusForbidden, map[string]string{"error": "操作请求缺少控制台标记"})
-					return
-				}
-				if s.actionToken != "" && !secureEqual(r.Header.Get("X-CoralBay-Token"), s.actionToken) {
-					writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "需要管理操作令牌"})
-					return
-				}
-				if origin := r.Header.Get("Origin"); origin != "" && origin != "https://"+s.domain && origin != "http://"+r.Host {
-					writeJSON(w, http.StatusForbidden, map[string]string{"error": "请求来源不受信任"})
-					return
-				}
-				if !s.allowAction(r.RemoteAddr) {
-					writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "操作过于频繁，请稍后再试"})
-					return
-				}
-			}
-			next(w, r)
+		if !s.validSession(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "登录已失效，请重新登录"})
 			return
 		}
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "当前安装未启用管理控制台"})
+		if r.Method != http.MethodGet {
+			if origin := r.Header.Get("Origin"); origin != "" && origin != "https://"+s.domain && origin != "http://"+r.Host {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "请求来源不受信任"})
+				return
+			}
+			if !s.allowAction(r.RemoteAddr) {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "操作过于频繁，请稍后再试"})
+				return
+			}
+		}
+		next(w, r)
 	}
+}
+
+func (s *server) sessionKey() []byte { return []byte(s.actionToken + "\x00" + s.adminPassword) }
+
+func (s *server) sign(value string) string {
+	mac := hmac.New(sha256.New, s.sessionKey())
+	_, _ = mac.Write([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *server) validSession(r *http.Request) bool {
+	cookie, err := r.Cookie("coralbay_session")
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 2 || !secureEqual(parts[1], s.sign(parts[0])) {
+		return false
+	}
+	expires, err := strconv.ParseInt(parts[0], 10, 64)
+	return err == nil && time.Now().Unix() < expires
+}
+
+func (s *server) login(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction("login:" + r.RemoteAddr) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "请稍后再试"})
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body) != nil || !secureEqual(body.Password, s.adminPassword) {
+		s.audit("login", "failed", r.RemoteAddr)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密码错误"})
+		return
+	}
+	expires := strconv.FormatInt(time.Now().Add(12*time.Hour).Unix(), 10)
+	http.SetCookie(w, &http.Cookie{Name: "coralbay_session", Value: expires + "." + s.sign(expires), Path: "/", MaxAge: 43200, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	s.audit("login", "completed", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "coralbay_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) sessionStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": s.validSession(r)})
 }
 
 func (s *server) allowAction(remote string) bool {
@@ -832,12 +1003,23 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
+	if !s.validSession(r) {
+		content, _ := fs.ReadFile(webFS, "web/login.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(content)
+		return
+	}
 	content, _ := fs.ReadFile(webFS, "web/admin.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("CDN-Cache-Control", "no-store")
 	w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
 	w.Write(content)
+}
+
+func (s *server) redirectRoot(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/", http.StatusMovedPermanently)
 }
 
 func (s *server) downloadTemplate(w http.ResponseWriter, r *http.Request) {
@@ -887,7 +1069,7 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" {
+	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" {
 		name := "web/" + strings.TrimPrefix(r.URL.Path, "/assets/")
 		content, err := fs.ReadFile(webFS, name)
 		if err != nil {
@@ -906,15 +1088,10 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/" {
-		content, _ := fs.ReadFile(webFS, "web/index.html")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
-		w.Header().Set("CDN-Cache-Control", "no-store")
-		w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
-		w.Write(content)
+		s.adminPage(w, r)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || strings.HasPrefix(r.URL.Path, "/_converted/") || r.URL.Path == "/_mirror/status.json" {
+	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/singbox/") || strings.HasPrefix(r.URL.Path, "/surge/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || strings.HasPrefix(r.URL.Path, "/_converted/") || r.URL.Path == "/_mirror/status.json" {
 		switch {
 		case r.URL.Path == "/_mirror/status.json":
 			w.Header().Set("Cache-Control", "no-store")

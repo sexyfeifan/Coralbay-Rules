@@ -7,8 +7,8 @@ Docker Hub：`sexyfeifan/coralbay-rules:latest`
 
 ## Web 管理界面
 
-- `/`：公开状态首页，显示规则版本、校验数量和同步时间。
-- `/admin/`：状态和诊断无需登录；同步、调整频率、升级、回滚等写操作需要安装时随机生成的操作令牌。令牌只保存在当前浏览器会话。
+- `/`：唯一的管理入口。未登录时显示密码页，登录后进入全功能控制台；默认密码为 `sexyfeifan`，建议安装后通过 `rules` → “修改管理员密码”立即更换。
+- `/admin/`：永久跳转到 `/`，不再保留第二套页面或公开状态首页。
 - Docker Socket 只挂载给独立更新器；主程序无法直接操作 Docker，更新器也只匹配 `coralbay-rules` scope。
 
 仓库包含 Push/PR 持续集成以及 Tag/手动触发的多架构 Docker 发布工作流。发布镜像包含 OCI 来源标签、SBOM 和 provenance。使用前在 GitHub 仓库中添加
@@ -48,7 +48,7 @@ sudo 666
 
 管理快捷命令仅保留 `sudo rules` 和 `sudo 666`。
 
-旧版本执行 `sudo rules update` 时会自动备份并刷新 Compose 配置；如果缺少管理操作令牌，会在升级过程中生成并显示。令牌也保存在权限为 `0600` 的 `/opt/coralbay-rules/.env` 中。
+旧版本执行 `sudo rules update` 时会自动备份并刷新 Compose 配置，并为旧安装补齐控制台密码与订阅转换服务。
 
 也可以直接执行子命令，例如 `sudo rules status`、`sudo rules sync`、`sudo rules logs` 和 `sudo rules update`。
 
@@ -78,6 +78,14 @@ Stash 模板沿用 Perfect Panel 的节点渲染逻辑，并将策略分组、�
 模板来源代码按其 MIT 许可证保存在 `templates/clients/perfect-panel/`。
 
 ## 跨客户端规则转换器
+
+控制台同时列出 666OS `release` 分支的三套原生产物：`/mihomo/`、`/singbox/` 和 `/surge/`。这些文件保持上游格式直接镜像；页面可按平台、名称和后缀筛选并复制链接。
+
+OpenClash 的 `MihomoPro_overwrite.conf` 会在每次同步时从 666OS/YYDS 下载到 `/_templates/MihomoPro_overwrite.conf`，避免客户端运行时依赖 GitHub。
+
+## 订阅链接转换
+
+Compose 内置官方 `tindy2013/subconverter` 后端，但不直接暴露其端口。管理员在控制台输入最多 5 个 HTTP/HTTPS 订阅地址并选择 Clash、Surge、Quantumult X、Loon、Surfboard、V2Ray 或 SS 目标后，CoralBay 会生成 HMAC 签名的 `/sub` 地址。客户端可以直接长期订阅该地址；签名只允许转换生成时指定的来源与目标，不能修改参数后将服务用作任意代理。
 
 同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：
 
