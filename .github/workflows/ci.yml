@@ -12,10 +12,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
       - name: Format
         run: test -z "$(gofmt -l .)"
       - name: Test
@@ -28,4 +29,3 @@ jobs:
         run: node --check web/app.js
       - name: Docker build
         run: docker build --build-arg VERSION=ci -t coralbay-rules:ci .
-
