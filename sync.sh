@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.2.1}"
+generator_version="${GENERATOR_VERSION:-4.2.2}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -166,6 +166,7 @@ sync_once() {
   printf '\n' >> "$build_dir/_templates/clients/loon.gotmpl.next"
   sed -e "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
     -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
+    -e "s|__ASSETS_BASE_URL__|$assets_base_url|g" \
     /app/templates/clients/native/loon-tail.conf \
     >> "$build_dir/_templates/clients/loon.gotmpl.next"
   mv -f "$build_dir/_templates/clients/loon.gotmpl.next" "$build_dir/_templates/clients/loon.gotmpl"

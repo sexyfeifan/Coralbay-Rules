@@ -141,7 +141,7 @@ func TestLoonAdapterUsesNativeRulesAndRegionalFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, expected := range []string{"[Remote Filter]", "香港自动 = url-test", "广告拦截", "surge/Advertising.txt", "policy = 广告拦截", "GEOIP,CN,国内流量", "FINAL,漏网之鱼"} {
+	for _, expected := range []string{"[Remote Filter]", "香港自动 = url-test", "广告拦截", "img-url=__ASSETS_BASE_URL__", "Hong_Kong.png", "AI.png", "surge/Advertising.txt", "policy = 广告拦截", "GEOIP,CN,国内流量", "FINAL,漏网之鱼"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("Loon adapter missing %q", expected)
 		}
