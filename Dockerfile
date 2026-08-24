@@ -1,5 +1,5 @@
 FROM golang:1.23-alpine AS build
-ARG VERSION=4.2.2
+ARG VERSION=4.2.3
 WORKDIR /src
 COPY go.mod ./
 COPY main.go ./
@@ -9,7 +9,7 @@ RUN normalized="${VERSION#v}" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/coralbay-ruleconvert ./cmd/ruleconvert
 
 FROM alpine:3.22
-ARG VERSION=4.2.2
+ARG VERSION=4.2.3
 LABEL org.opencontainers.image.title="CoralBay Rules" \
       org.opencontainers.image.source="https://github.com/sexyfeifan/Coralbay-Rules" \
       org.opencontainers.image.version="${VERSION}"

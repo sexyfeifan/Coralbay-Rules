@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.2.2}"
+generator_version="${GENERATOR_VERSION:-4.2.3}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -228,7 +228,7 @@ sync_once() {
     done
   }
   validate_ini_template "$build_dir/_templates/clients/loon.gotmpl" "Proxy" "Remote Filter" "Proxy Group" "URL Rewrite" "Remote Rule" "Rule"
-  if rg -q 'reality-public-key|reality-short-id|tls-name=' "$build_dir/_templates/clients/loon.gotmpl"; then
+  if grep -Eq 'reality-public-key|reality-short-id|tls-name=' "$build_dir/_templates/clients/loon.gotmpl"; then
     log "ERROR" "Loon 模板包含不兼容的 Reality 字段"
     exit 1
   fi
