@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.5.0}"
+generator_version="${GENERATOR_VERSION:-4.6.0}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -80,9 +80,30 @@ sync_once() {
   rules_base_url="https://$mirror_domain/"
   assets_base_url="https://$mirror_domain/_assets/icons/"
   native_list_base_url="https://$mirror_domain/_converted/native/list/"
-  curl -fsSL --connect-timeout 10 --max-time 30 \
-    "https://raw.githubusercontent.com/666OS/YYDS/main/mihomo/openclash/MihomoPro_overwrite.conf" \
-    -o "$build_dir/_templates/MihomoPro_overwrite.conf.next"
+  # Publish a self-contained MihomoPro artifact. The filename referenced by
+  # the original overwrite has been removed upstream; use the current Pro_cn
+  # source and fall back to the snapshot shipped inside the image.
+  mihomopro_source="$build_dir/_templates/MihomoPro.upstream.yaml"
+  if curl -fsSL --connect-timeout 10 --max-time 30 \
+    "https://raw.githubusercontent.com/666OS/YYDS/main/mihomo/config/cn/Pro_cn.yaml" \
+    -o "$mihomopro_source.next" && [ -s "$mihomopro_source.next" ]; then
+    mv -f "$mihomopro_source.next" "$mihomopro_source"
+    mihomopro_origin="upstream"
+  else
+    rm -f "$mihomopro_source.next"
+    cp /app/templates/openclash/Pro_cn.upstream.yaml "$mihomopro_source"
+    mihomopro_origin="bundled-fallback"
+    log "MihomoPro 上游不可用，使用镜像内置快照"
+  fi
+  sed \
+    -e "s|https://github.com/666OS/rules/raw/release/|$rules_base_url|g" \
+    -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
+    -e '/^external-ui-url:/d' \
+    "$mihomopro_source" > "$build_dir/_templates/MihomoPro.yaml.next"
+  mv -f "$build_dir/_templates/MihomoPro.yaml.next" "$build_dir/_templates/MihomoPro.yaml"
+  sed "s|__MIHOMOPRO_CONFIG_URL__|https://$mirror_domain/_templates/MihomoPro.yaml|g" \
+    /app/templates/openclash/MihomoPro_overwrite.conf \
+    > "$build_dir/_templates/MihomoPro_overwrite.conf.next"
   mv -f "$build_dir/_templates/MihomoPro_overwrite.conf.next" "$build_dir/_templates/MihomoPro_overwrite.conf"
   sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
     -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
@@ -216,6 +237,13 @@ sync_once() {
   [ -s "$build_dir/_converted/manifest.json" ]
   [ -s "$build_dir/_templates/clients/clash.gotmpl" ]
   [ -s "$build_dir/_templates/clients/stash.gotmpl" ]
+  [ -s "$build_dir/_templates/MihomoPro.yaml" ]
+  [ -s "$build_dir/_templates/MihomoPro_overwrite.conf" ]
+  if grep -Eq 'git\.imee\.me|github\.com/666OS/rules/raw|github\.com/Koolson/Qure/raw' \
+    "$build_dir/_templates/MihomoPro.yaml" "$build_dir/_templates/MihomoPro_overwrite.conf"; then
+    log "校验失败：MihomoPro 产物仍包含应本地化的外链" >&2
+    return 1
+  fi
   validate_ini_template() {
     template="$1"; shift
     previous=0
@@ -242,7 +270,7 @@ sync_once() {
     return 1
   fi
   cat > "$build_dir/_mirror/status.json.next" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT,"mihomopro_origin":"$mihomopro_origin"}
 EOF
   mv -f "$build_dir/_mirror/status.json.next" "$build_dir/_mirror/status.json"
   cat > "$build_dir/index.html.next" <<EOF
