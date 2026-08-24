@@ -89,6 +89,8 @@ Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端�
 
 订阅转换支持最多合并 5 个 HTTP/HTTPS 地址，并输出 Clash/Mihomo、ClashR、sing-box、Surge、Surfboard、Shadowrocket、Quantumult/Quantumult X、Loon、V2Ray、SS、SSR、Trojan 和混合 URI。可配置包含/排除正则、节点重命名、远程配置预设、更新间隔、Emoji、排序、去重、UDP/XUDP、TFO、TLS 1.3、证书校验、仅节点输出、规则展开、DoH 和客户端专属参数。CoralBay 会先实际转换并检查可用节点数量，验证通过才生成 HMAC 签名的 `/sub` 地址；同时提供二维码、签名链接反向解析和管理员生成历史。不兼容目标（例如全 VLESS Reality 订阅转 Surge）会明确拒绝，不发布空配置。
 
+远程配置库收录 `sub-web-modify` 当前维护的 88 条配置，按“通用、ACL、全网搜集、各大机场、特殊”分组，其中全网搜集配置 32 条。默认调用原始链接，也可切换到 CoralBay 本机镜像。应用启动时会在后台并发刷新缓存，管理员也可手动更新；上游失效时保留最后一次成功文件并显示最近错误，不会用失败响应覆盖可用缓存。
+
 转换后端只在 Compose 内网提供服务，订阅不会发送给公共转换站；项目不提供公共短链接，也不执行用户提交的任意 JavaScript。
 
 同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：

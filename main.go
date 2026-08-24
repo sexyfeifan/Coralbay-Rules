@@ -27,10 +27,13 @@ import (
 	"time"
 )
 
-var version = "4.3.0"
+var version = "4.4.0"
 
 //go:embed web/*
 var webFS embed.FS
+
+//go:embed remote-configs.json
+var remoteConfigCatalog []byte
 
 type server struct {
 	dataDir         string
@@ -169,18 +172,21 @@ func main() {
 	mux.HandleFunc("GET /api/admin/subconverter/status", s.auth(s.subconverterStatus))
 	mux.HandleFunc("POST /api/admin/subscription-link", s.auth(s.createSubscriptionLinkV2))
 	mux.HandleFunc("GET /api/admin/subscription-presets", s.auth(s.subscriptionPresets))
+	mux.HandleFunc("POST /api/admin/subscription-presets/sync", s.auth(s.syncSubscriptionPresets))
 	mux.HandleFunc("GET /api/admin/subscription-capabilities", s.auth(s.subscriptionCapabilities))
 	mux.HandleFunc("GET /api/admin/subscription-history", s.auth(s.subscriptionHistory))
 	mux.HandleFunc("DELETE /api/admin/subscription-history", s.auth(s.clearSubscriptionHistory))
 	mux.HandleFunc("POST /api/admin/subscription-parse", s.auth(s.parseSubscriptionLink))
 	mux.HandleFunc("GET /api/admin/subscription-qr", s.auth(s.subscriptionQRCode))
 	mux.HandleFunc("GET /sub", s.signedSubscription)
+	mux.HandleFunc("GET /_configs/{file}", s.remoteConfigFile)
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /downloads/templates/{client}", s.downloadClientTemplate)
 	mux.HandleFunc("GET /admin/", s.redirectRoot)
 	mux.HandleFunc("GET /", s.publicFiles)
 
 	go s.scheduler()
+	go s.refreshRemoteConfigs(context.Background())
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("CoralBay Rules v%s listening on %s", version, addr)
 	log.Fatal(http.ListenAndServe(addr, securityHeaders(mux)))
@@ -1233,7 +1239,7 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" {
+	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" || r.URL.Path == "/assets/icon.svg" {
 		name := "web/" + strings.TrimPrefix(r.URL.Path, "/assets/")
 		content, err := fs.ReadFile(webFS, name)
 		if err != nil {
@@ -1242,6 +1248,8 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasSuffix(name, ".css") {
 			w.Header().Set("Content-Type", "text/css")
+		} else if strings.HasSuffix(name, ".svg") {
+			w.Header().Set("Content-Type", "image/svg+xml")
 		} else {
 			w.Header().Set("Content-Type", "application/javascript")
 		}

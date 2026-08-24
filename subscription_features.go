@@ -58,19 +58,6 @@ type subscriptionHistoryItem struct {
 	Config      string    `json:"config,omitempty"`
 }
 
-var converterPresets = []map[string]any{
-	{"id": "none", "name": "不使用远程配置", "group": "CoralBay", "url": "", "description": "仅转换节点格式，不引入第三方分组。"},
-	{"id": "acl-full", "name": "ACL4SSR 全分组", "group": "ACL4SSR", "url": "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full.ini", "description": "完整 ACL4SSR 分组。"},
-	{"id": "acl-full-noauto", "name": "ACL4SSR 全分组（无自动测速）", "group": "ACL4SSR", "url": "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full_NoAuto.ini", "description": "适合希望手动选择节点的配置。"},
-	{"id": "acl-adblock", "name": "ACL4SSR 去广告增强", "group": "ACL4SSR", "url": "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_AdblockPlus.ini", "description": "加入广告拦截规则。"},
-	{"id": "acl-multi", "name": "ACL4SSR 多国家", "group": "ACL4SSR", "url": "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_MultiCountry.ini", "description": "按多个地区建立策略组。"},
-	{"id": "acl-mini", "name": "ACL4SSR 精简无测速", "group": "ACL4SSR", "url": "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Mini_NoAuto.ini", "description": "规则和策略组较少。"},
-}
-
-func (s *server) subscriptionPresets(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"presets": converterPresets, "note": "远程配置由 CoralBay 本机后端拉取；原始订阅不会发送给公共转换后端。"})
-}
-
 func (s *server) subscriptionCapabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"self_hosted": true,
