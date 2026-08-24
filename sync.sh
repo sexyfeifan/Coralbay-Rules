@@ -2,14 +2,23 @@
 set -eu
 
 repository="${RULES_REPOSITORY:-https://github.com/666OS/rules.git}"
+allowed_repository="${ALLOWED_RULES_REPOSITORY:-https://github.com/666OS/rules.git}"
 branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
+generator_version="${GENERATOR_VERSION:-3.6.0}"
+generator_version="${generator_version#v}"
+lock_dir="/data/.sync.lock"
 
 log() {
   printf '%s [sync] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
 }
+
+if [ "$repository" != "$allowed_repository" ]; then
+  log "拒绝未授权的上游仓库：$repository" >&2
+  exit 64
+fi
 
 validate_release() {
   release_dir="$1"
@@ -30,11 +39,17 @@ validate_release() {
 
 sync_once() {
   mkdir -p /data/releases
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    log "已有同步任务正在运行" >&2
+    return 75
+  fi
   staging="/data/.staging.$$"
   geo_staging="/data/.geo-staging.$$"
+  build_dir="/data/.release-build.$$"
   rm -rf "$staging"
   rm -rf "$geo_staging"
-  trap 'rm -rf "$staging" "$geo_staging"' EXIT INT TERM
+  rm -rf "$build_dir"
+  trap 'rm -rf "$staging" "$geo_staging" "$build_dir"; rmdir "$lock_dir" 2>/dev/null || true' EXIT INT TERM
 
   log "开始同步 $repository ($branch)"
   git clone --quiet --depth 1 --single-branch --branch "$branch" "$repository" "$staging"
@@ -45,34 +60,32 @@ sync_once() {
   git clone --quiet --depth 1 --single-branch --branch geo "$repository" "$geo_staging"
   geo_commit="$(git -C "$geo_staging" rev-parse HEAD)"
 
-  release_dir="/data/releases/$commit"
-  if [ ! -d "$release_dir" ]; then
-    rm -rf "$staging/.git"
-    mv "$staging" "$release_dir"
-  else
-    rm -rf "$staging"
-  fi
+  geo_short="$(printf '%s' "$geo_commit" | cut -c1-12)"
+  config_hash="$(printf '%s' "$mirror_domain" | sha256sum | cut -c1-12)"
+  release_id="${commit}-${geo_short}-v${generator_version}-${config_hash}"
+  release_dir="/data/releases/$release_id"
+  rm -rf "$staging/.git"
+  mv "$staging" "$build_dir"
 
   # Regenerate deployment-specific files even if the upstream commit is the
   # same, so image upgrades and domain changes take effect immediately.
-  mkdir -p "$release_dir/_mirror" "$release_dir/_templates/clients" "$release_dir/_assets" "$release_dir/_sources"
-  rm -rf "$release_dir/_assets/icons"
-  cp -R /app/assets/icons "$release_dir/_assets/icons"
-  rm -rf "$release_dir/_sources/geo"
-  mkdir -p "$release_dir/_sources/geo"
-  cp -R "$geo_staging/site" "$geo_staging/ip" "$release_dir/_sources/geo/"
-  cp "$geo_staging/LICENSE.txt" "$release_dir/_sources/geo/LICENSE.txt"
+  mkdir -p "$build_dir/_mirror" "$build_dir/_templates/clients" "$build_dir/_assets" "$build_dir/_sources"
+  cp -R /app/assets/icons "$build_dir/_assets/icons"
+  mkdir -p "$build_dir/_sources/geo"
+  cp -R "$geo_staging/site" "$geo_staging/ip" "$build_dir/_sources/geo/"
+  cp "$geo_staging/LICENSE.txt" "$build_dir/_sources/geo/LICENSE.txt"
   log "生成跨客户端原生规则集"
-  coralbay-ruleconvert -geo "$geo_staging" -out "$release_dir/_converted"
+  coralbay-ruleconvert -geo "$geo_staging" -out "$build_dir/_converted"
+  log "生成客户端模板"
   rules_base_url="https://$mirror_domain/"
   assets_base_url="https://$mirror_domain/_assets/icons/"
   native_list_base_url="https://$mirror_domain/_converted/native/list/"
   sed -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
     -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
     /app/templates/ppanel_openclash_pro_cn.gotmpl \
-    > "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next"
-  mv -f "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next" \
-    "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl"
+    > "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next"
+  mv -f "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl.next" \
+    "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl"
 
   # Template center: preserve every Perfect Panel client template locally.
   for source_template in /app/templates/clients/perfect-panel/*.gotmpl; do
@@ -80,18 +93,18 @@ sync_once() {
     [ "$client" = "clash" ] && continue
     [ "$client" = "stash" ] && continue
     sed "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
-      "$source_template" > "$release_dir/_templates/clients/$client.gotmpl.next"
-    mv -f "$release_dir/_templates/clients/$client.gotmpl.next" "$release_dir/_templates/clients/$client.gotmpl"
+      "$source_template" > "$build_dir/_templates/clients/$client.gotmpl.next"
+    mv -f "$build_dir/_templates/clients/$client.gotmpl.next" "$build_dir/_templates/clients/$client.gotmpl"
   done
-  cp "$release_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$release_dir/_templates/clients/clash.gotmpl"
+  cp "$build_dir/_templates/ppanel_openclash_pro_cn.gotmpl" "$build_dir/_templates/clients/clash.gotmpl"
 
   # Keep Perfect Panel's node renderer, then map the complete 666OS Pro_cn
   # policy group and MRS rule layers to Stash-native fields.
   awk '/^proxy-groups:/{exit} {print}' /app/templates/clients/perfect-panel/stash.gotmpl \
-    > "$release_dir/_templates/clients/stash.gotmpl.next"
+    > "$build_dir/_templates/clients/stash.gotmpl.next"
   sed "s|__ASSETS_BASE_URL__|$assets_base_url|g" /app/templates/clients/stash-proxy-groups.yaml \
-    >> "$release_dir/_templates/clients/stash.gotmpl.next"
-  printf '\nrules:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
+    >> "$build_dir/_templates/clients/stash.gotmpl.next"
+  printf '\nrules:\n' >> "$build_dir/_templates/clients/stash.gotmpl.next"
   while IFS= read -r relative_path; do
     [ -n "$relative_path" ] || continue
     base="$(basename "$relative_path" .mrs)"
@@ -118,9 +131,9 @@ sync_once() {
       China) target="国内流量" ;;
       *) target="国外流量" ;;
     esac
-    printf '  - RULE-SET,%s,%s\n' "$provider" "$target" >> "$release_dir/_templates/clients/stash.gotmpl.next"
+    printf '  - RULE-SET,%s,%s\n' "$provider" "$target" >> "$build_dir/_templates/clients/stash.gotmpl.next"
   done < "$expected_file"
-  printf '  - MATCH,漏网之鱼\n\nrule-providers:\n' >> "$release_dir/_templates/clients/stash.gotmpl.next"
+  printf '  - MATCH,漏网之鱼\n\nrule-providers:\n' >> "$build_dir/_templates/clients/stash.gotmpl.next"
   while IFS= read -r relative_path; do
     [ -n "$relative_path" ] || continue
     base="$(basename "$relative_path" .mrs)"
@@ -129,33 +142,33 @@ sync_once() {
     provider="${base}${suffix}"
     printf '  %s: { type: http, behavior: %s, format: mrs, path: ./rules/%s.mrs, url: %s%s, interval: 86400 }\n' \
       "$provider" "$behavior" "$provider" "$rules_base_url" "$relative_path" \
-      >> "$release_dir/_templates/clients/stash.gotmpl.next"
+      >> "$build_dir/_templates/clients/stash.gotmpl.next"
   done < "$expected_file"
-  mv -f "$release_dir/_templates/clients/stash.gotmpl.next" "$release_dir/_templates/clients/stash.gotmpl"
+  mv -f "$build_dir/_templates/clients/stash.gotmpl.next" "$build_dir/_templates/clients/stash.gotmpl"
 
   # Native text-rule clients share the same audited 666OS geo conversion
   # output, while retaining Perfect Panel's protocol-specific node renderer.
   for client in surge loon surfboard; do
     awk '/^\[Proxy Group\]/{exit} {print}' "/app/templates/clients/perfect-panel/$client.gotmpl" \
-      > "$release_dir/_templates/clients/$client.gotmpl.next"
+      > "$build_dir/_templates/clients/$client.gotmpl.next"
     sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
       "/app/templates/clients/native/$client-tail.conf" \
-      >> "$release_dir/_templates/clients/$client.gotmpl.next"
-    mv -f "$release_dir/_templates/clients/$client.gotmpl.next" "$release_dir/_templates/clients/$client.gotmpl"
+      >> "$build_dir/_templates/clients/$client.gotmpl.next"
+    mv -f "$build_dir/_templates/clients/$client.gotmpl.next" "$build_dir/_templates/clients/$client.gotmpl"
   done
   awk '/^policy_groups:/{exit} {print}' /app/templates/clients/perfect-panel/egern.gotmpl \
-    > "$release_dir/_templates/clients/egern.gotmpl.next"
+    > "$build_dir/_templates/clients/egern.gotmpl.next"
   sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
     /app/templates/clients/native/egern-tail.yaml \
-    >> "$release_dir/_templates/clients/egern.gotmpl.next"
-  mv -f "$release_dir/_templates/clients/egern.gotmpl.next" "$release_dir/_templates/clients/egern.gotmpl"
+    >> "$build_dir/_templates/clients/egern.gotmpl.next"
+  mv -f "$build_dir/_templates/clients/egern.gotmpl.next" "$build_dir/_templates/clients/egern.gotmpl"
 
   # sing-box family: keep each version's node schema, but move its remote
   # routing dependencies from third-party SRS URLs to CoralBay's generated,
   # auditable source-format JSON. Version 3 rule sets work on 1.11-1.14.
   native_singbox_base_url="https://$mirror_domain/_converted/native/sing-box/"
   for client in hiddify sing-box-1.11 sing-box-1.12 sing-box-1.13 sing-box-1.14; do
-    template="$release_dir/_templates/clients/$client.gotmpl"
+    template="$build_dir/_templates/clients/$client.gotmpl"
     sed \
       -e 's|"format": "binary"|"format": "source"|g' \
       -e "s|https://anti-ad.net/anti-ad-sing-box.srs|${native_singbox_base_url}site/advertising.json|g" \
@@ -184,11 +197,19 @@ sync_once() {
       "$template" > "$template.next"
     mv -f "$template.next" "$template"
   done
-  cat > "$release_dir/_mirror/status.json.next" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
+  log "校验生成产物"
+  [ -s "$build_dir/_converted/manifest.json" ]
+  [ -s "$build_dir/_templates/clients/clash.gotmpl" ]
+  [ -s "$build_dir/_templates/clients/stash.gotmpl" ]
+  if find "$build_dir" -type l -print | grep -q .; then
+    log "校验失败：发布产物中不允许符号链接" >&2
+    return 1
+  fi
+  cat > "$build_dir/_mirror/status.json.next" <<EOF
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT}
 EOF
-  mv -f "$release_dir/_mirror/status.json.next" "$release_dir/_mirror/status.json"
-  cat > "$release_dir/index.html.next" <<EOF
+  mv -f "$build_dir/_mirror/status.json.next" "$build_dir/_mirror/status.json"
+  cat > "$build_dir/index.html.next" <<EOF
 <!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CoralBay Rules</title></head>
@@ -203,17 +224,27 @@ EOF
 <p>当前上游版本：<code>$commit</code></p>
 </body></html>
 EOF
-  mv -f "$release_dir/index.html.next" "$release_dir/index.html"
+  mv -f "$build_dir/index.html.next" "$build_dir/index.html"
 
-  ln -sfn "releases/$commit" /data/current
+  log "发布不可变版本 $release_id"
+  if [ -d "$release_dir" ]; then
+    rm -rf "$build_dir"
+  else
+    mv "$build_dir" "$release_dir"
+  fi
+  current_next="/data/.current.$$"
+  ln -s "releases/$release_id" "$current_next"
+  mv -f "$current_next" /data/current
 
   # 保留当前版本以及最近两个历史版本。
   ls -1dt /data/releases/* 2>/dev/null | awk 'NR > 3' | while IFS= read -r old_release; do
     [ "$old_release" = "$release_dir" ] || rm -rf "$old_release"
   done
 
+  rm -rf "$geo_staging"
+  rmdir "$lock_dir" 2>/dev/null || true
   trap - EXIT INT TERM
-  log "同步完成，当前版本 $commit，共校验 $VALIDATED_COUNT 个文件"
+  log "同步完成，当前版本 $release_id，共校验 $VALIDATED_COUNT 个文件"
 }
 
 run_once="false"

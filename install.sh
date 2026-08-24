@@ -123,6 +123,7 @@ services:
       SYNC_INTERVAL: ${SYNC_INTERVAL}
       MIRROR_DOMAIN: ${MIRROR_DOMAIN}
       ADMIN_AUTH_DISABLED: ${ADMIN_AUTH_DISABLED}
+      ADMIN_ACTION_TOKEN: ${ADMIN_ACTION_TOKEN}
       UPDATER_URL: http://updater:8080/v1/update
       UPDATER_TOKEN: ${UPDATER_TOKEN}
     labels:
@@ -155,7 +156,7 @@ EOF
 
 install_service() {
   need_root; need_docker
-  local dir domain interval local_port updater_token
+  local dir domain interval local_port updater_token action_token
   dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   load_env "$dir"
   domain="$(prompt_required '规则域名（例如 rules.example.com）')"
@@ -184,6 +185,7 @@ install_service() {
   [[ "$interval" =~ ^[0-9]+$ && "$interval" -ge 3600 ]] || fail "同步间隔至少为 3600 秒。"
 
   updater_token="${UPDATER_TOKEN:-$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')}"
+  action_token="${ADMIN_ACTION_TOKEN:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 
   install_manager_command
   install -d -m 0755 "$dir/data" "$dir/caddy_data" "$dir/caddy_config"
@@ -197,6 +199,7 @@ RULES_BRANCH=release
 DEPLOY_MODE=proxy
 LOCAL_PORT=$local_port
 ADMIN_AUTH_DISABLED=true
+ADMIN_ACTION_TOKEN=$action_token
 UPDATER_TOKEN=$updater_token
 EOF
   chmod 600 "$dir/.env"
@@ -222,6 +225,7 @@ EOF
   info "本地后台：http://127.0.0.1:$local_port/admin/"
   warn "请在现有 Nginx/PPanel/OpenResty 中把 $domain 反向代理到 127.0.0.1:$local_port，并在现有面板管理 HTTPS 证书。"
   info "今后在 SSH 中输入 rules 或 666 即可重新打开管理菜单。"
+  info "管理操作令牌：$action_token（仅在首次执行同步、回滚或升级时输入，浏览器会话内保存）"
 }
 
 service_status() {
@@ -277,12 +281,27 @@ update_service() {
   need_root; need_docker
   local dir="$(prompt '安装目录' "$DEFAULT_DIR")"
   [[ -f "$dir/compose.yaml" ]] || fail "未在 $dir 找到安装。"
+  load_env "$dir"
   info "正在升级管理脚本……"
   install_manager_command
+  backup_config "$dir"
+  if [[ -z "${ADMIN_ACTION_TOKEN:-}" ]]; then
+    ADMIN_ACTION_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    printf '\nADMIN_ACTION_TOKEN=%s\n' "$ADMIN_ACTION_TOKEN" >> "$dir/.env"
+    chmod 600 "$dir/.env"
+    info "已为旧版本生成管理操作令牌：$ADMIN_ACTION_TOKEN"
+  fi
+  # Always refresh Compose during an upgrade so older installations receive
+  # newly scoped environment variables and updater hardening.
+  write_compose "$dir"
+  docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" config --quiet
   info "正在拉取最新容器镜像……"
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" pull
   docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" up -d
-  info "管理脚本、容器镜像和服务已经全部升级。"
+  local running_version
+  running_version="$(docker compose -f "$dir/compose.yaml" --env-file "$dir/.env" exec -T app sh -c 'curl -fsS http://127.0.0.1:8080/api/public/status' 2>/dev/null || true)"
+  info "管理脚本、Compose 配置、容器镜像和服务已经全部升级。"
+  [[ -n "$running_version" ]] && printf '%s\n' "$running_version"
 }
 
 verify_service() {

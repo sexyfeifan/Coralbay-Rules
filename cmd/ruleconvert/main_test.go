@@ -25,6 +25,9 @@ func TestConvertFileProducesNativeFormats(t *testing.T) {
 	if item.Entries != 3 {
 		t.Fatalf("got %d entries, want 3", item.Entries)
 	}
+	if len(item.ListSHA256) != 64 || len(item.SingBoxSHA256) != 64 {
+		t.Fatalf("missing output checksums: %+v", item)
+	}
 	list, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(item.List)))
 	if err != nil {
 		t.Fatal(err)

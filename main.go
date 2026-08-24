@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"crypto/subtle"
 	"crypto/tls"
 	"embed"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -15,11 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
-const version = "3.5.0"
+var version = "3.6.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -30,12 +33,31 @@ type server struct {
 	authDisabled  bool
 	updaterURL    string
 	updaterToken  string
+	actionToken   string
 	interval      time.Duration
 	scheduleReset chan time.Duration
 	mu            sync.RWMutex
 	syncing       bool
 	lastError     string
 	logs          []string
+	job           syncJob
+	latest        releaseInfo
+	latestChecked time.Time
+	actionTimes   map[string]time.Time
+}
+
+type syncJob struct {
+	ID         string    `json:"id"`
+	State      string    `json:"state"`
+	Stage      string    `json:"stage"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+type releaseInfo struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`
 }
 
 type persistedSettings struct {
@@ -74,12 +96,15 @@ var clientTemplates = []clientTemplate{
 }
 
 type mirrorStatus struct {
-	OK             bool   `json:"ok"`
-	Repository     string `json:"repository"`
-	Branch         string `json:"branch"`
-	Commit         string `json:"commit"`
-	SyncedAt       string `json:"synced_at"`
-	ValidatedFiles int    `json:"validated_files"`
+	OK               bool   `json:"ok"`
+	Repository       string `json:"repository"`
+	Branch           string `json:"branch"`
+	Commit           string `json:"commit"`
+	GeoCommit        string `json:"geo_commit"`
+	ReleaseID        string `json:"release_id"`
+	GeneratorVersion string `json:"generator_version"`
+	SyncedAt         string `json:"synced_at"`
+	ValidatedFiles   int    `json:"validated_files"`
 }
 
 func main() {
@@ -100,8 +125,17 @@ func main() {
 		authDisabled:  strings.EqualFold(env("ADMIN_AUTH_DISABLED", "true"), "true"),
 		updaterURL:    env("UPDATER_URL", "http://updater:8080/v1/update"),
 		updaterToken:  os.Getenv("UPDATER_TOKEN"),
+		actionToken:   os.Getenv("ADMIN_ACTION_TOKEN"),
 		interval:      time.Duration(intervalSeconds) * time.Second,
 		scheduleReset: make(chan time.Duration, 1),
+		actionTimes:   make(map[string]time.Time),
+	}
+	if content, err := os.ReadFile(filepath.Join(dataDir, "activity.log")); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+		if len(lines) > 300 {
+			lines = lines[len(lines)-300:]
+		}
+		s.logs = lines
 	}
 
 	mux := http.NewServeMux()
@@ -111,13 +145,16 @@ func main() {
 	mux.HandleFunc("GET /api/public/rule-details", s.ruleDetails)
 	mux.HandleFunc("GET /api/public/templates", s.templateCatalog)
 	mux.HandleFunc("GET /api/public/conversions", s.conversionCatalog)
+	mux.HandleFunc("GET /api/public/diagnostics", s.publicDiagnostics)
 	mux.HandleFunc("GET /api/admin/status", s.auth(s.adminStatus))
+	mux.HandleFunc("GET /api/admin/job", s.auth(s.currentJob))
 	mux.HandleFunc("POST /api/admin/sync", s.auth(s.syncNow))
 	mux.HandleFunc("GET /api/admin/logs", s.auth(s.getLogs))
 	mux.HandleFunc("GET /api/admin/releases", s.auth(s.releases))
 	mux.HandleFunc("POST /api/admin/rollback", s.auth(s.rollback))
 	mux.HandleFunc("PUT /api/admin/settings", s.auth(s.updateSettings))
 	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
+	mux.HandleFunc("GET /api/admin/audit", s.auth(s.getAudit))
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
 	mux.HandleFunc("GET /downloads/templates/{client}", s.downloadClientTemplate)
 	mux.HandleFunc("GET /admin/", s.adminPage)
@@ -199,13 +236,22 @@ func (s *server) ruleCatalog(w http.ResponseWriter, _ *http.Request) {
 func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
 	items := make([]map[string]any, 0, len(clientTemplates))
 	for _, client := range clientTemplates {
+		policy, rules, validation := "无", "无", "基础检查"
+		switch client.Capability {
+		case "adapted":
+			policy, rules, validation = "Pro_cn 已映射", "本地规则镜像", "结构校验通过"
+		case "converted":
+			policy, rules, validation = "基础分组", "本地 Source JSON", "JSON 源校验通过"
+		}
 		items = append(items, map[string]any{
 			"id": client.ID, "name": client.Name, "extension": client.Extension,
 			"enhanced": client.Enhanced, "capability": client.Capability, "description": client.Description,
 			"ppanel_name": client.PPanelName, "user_agent": client.UserAgent,
 			"output_format": client.OutputFormat, "url_scheme": client.URLScheme,
-			"online_url":   "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
-			"download_url": "/downloads/templates/" + client.ID,
+			"online_url":     "https://" + s.domain + "/_templates/clients/" + client.ID + ".gotmpl",
+			"download_url":   "/downloads/templates/" + client.ID,
+			"node_rendering": true, "policy_groups": policy, "rule_sources": rules,
+			"validation": validation,
 		})
 	}
 	writeJSON(w, 200, map[string]any{"templates": items, "count": len(items)})
@@ -220,12 +266,14 @@ func (s *server) conversionCatalog(w http.ResponseWriter, _ *http.Request) {
 	var manifest struct {
 		Count int `json:"count"`
 		Sets  []struct {
-			ID      string `json:"id"`
-			Kind    string `json:"kind"`
-			Source  string `json:"source"`
-			Entries int    `json:"entries"`
-			List    string `json:"list"`
-			SingBox string `json:"sing_box"`
+			ID            string `json:"id"`
+			Kind          string `json:"kind"`
+			Source        string `json:"source"`
+			Entries       int    `json:"entries"`
+			List          string `json:"list"`
+			SingBox       string `json:"sing_box"`
+			ListSHA256    string `json:"list_sha256"`
+			SingBoxSHA256 string `json:"sing_box_sha256"`
 		} `json:"sets"`
 	}
 	if json.Unmarshal(content, &manifest) != nil {
@@ -238,9 +286,45 @@ func (s *server) conversionCatalog(w http.ResponseWriter, _ *http.Request) {
 			"id": item.ID, "kind": item.Kind, "source": item.Source, "entries": item.Entries,
 			"list_url":    "https://" + s.domain + "/_converted/" + item.List,
 			"singbox_url": "https://" + s.domain + "/_converted/" + item.SingBox,
+			"list_sha256": item.ListSHA256, "singbox_sha256": item.SingBoxSHA256,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "sets": items})
+}
+
+func (s *server) publicDiagnostics(w http.ResponseWriter, _ *http.Request) {
+	status, statusErr := s.readStatus()
+	manifestPath := filepath.Join(s.dataDir, "current", "_converted", "manifest.json")
+	content, manifestErr := os.ReadFile(manifestPath)
+	var manifest struct {
+		Sets []struct {
+			Entries int `json:"entries"`
+		} `json:"sets"`
+	}
+	if manifestErr == nil {
+		manifestErr = json.Unmarshal(content, &manifest)
+	}
+	real, empty := 0, 0
+	for _, item := range manifest.Sets {
+		if item.Entries == 0 {
+			empty++
+		} else {
+			real++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      statusErr == nil && status.OK && manifestErr == nil,
+		"release": map[string]any{"id": status.ReleaseID, "commit": status.Commit, "geo_commit": status.GeoCommit, "generator_version": status.GeneratorVersion},
+		"rules":   map[string]any{"validated_mrs": status.ValidatedFiles, "converted_real": real, "safe_empty": empty, "total": real + empty},
+		"icons":   s.iconStatus(), "status_error": errorText(statusErr), "manifest_error": errorText(manifestErr),
+	})
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (s *server) ruleDetails(w http.ResponseWriter, r *http.Request) {
@@ -255,17 +339,35 @@ func (s *server) ruleDetails(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "可读源尚未同步，请先执行规则同步"})
 		return
 	}
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize < 1 || pageSize > 500 {
+		pageSize = 200
+	}
 	entries := make([]string, 0)
 	for _, line := range strings.Split(string(content), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
+		if line != "" && !strings.HasPrefix(line, "#") && (query == "" || strings.Contains(strings.ToLower(line), query)) {
 			entries = append(entries, line)
 		}
+	}
+	total := len(entries)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
 	}
 	writeJSON(w, 200, map[string]any{
 		"path": relative, "source_path": source,
 		"source_url": "https://github.com/666OS/rules/blob/geo/" + source,
-		"count":      len(entries), "entries": entries,
+		"count":      total, "page": page, "page_size": pageSize, "entries": entries[start:end],
 	})
 }
 
@@ -313,24 +415,20 @@ func ruleIcon(relative string) string {
 
 func (s *server) adminStatus(w http.ResponseWriter, _ *http.Request) {
 	status, _ := s.readStatus()
-	type releaseResult struct{ version, url string }
-	releaseChannel := make(chan releaseResult, 1)
 	certificateChannel := make(chan map[string]any, 1)
-	go func() { latest, url := latestVersion(); releaseChannel <- releaseResult{latest, url} }()
 	go func() { certificateChannel <- certificateStatus(s.domain) }()
 	icons := s.iconStatus()
-	var disk syscall.Statfs_t
-	_ = syscall.Statfs(s.dataDir, &disk)
-	release := <-releaseChannel
+	release := s.cachedLatestVersion()
 	cert := <-certificateChannel
 	s.mu.RLock()
 	response := map[string]any{
 		"version": version, "domain": s.domain, "syncing": s.syncing,
 		"last_error": s.lastError, "interval_seconds": int(s.interval.Seconds()),
-		"status": status, "latest_version": release.version, "update_available": newerVersion(release.version, "v"+version),
-		"release_url": release.url, "certificate": cert, "icons": icons,
-		"disk_free_bytes": disk.Bavail * uint64(disk.Bsize),
-		"template_url":    "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
+		"status": status, "latest_version": release.Version, "update_available": newerVersion(release.Version, "v"+version),
+		"release_url": release.URL, "certificate": cert, "icons": icons,
+		"template_url": "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
+		"job":          s.job, "next_sync_at": time.Now().Add(s.interval),
+		"security": map[string]any{"action_token_required": s.actionToken != "", "public_read_only": true},
 	}
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, response)
@@ -349,15 +447,109 @@ func (s *server) readStatus() (mirrorStatus, error) {
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.authDisabled {
-			if r.Method != http.MethodGet && r.Header.Get("X-CoralBay-Action") != "console" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "操作请求缺少控制台标记"})
-				return
+			if r.Method != http.MethodGet {
+				if r.Header.Get("X-CoralBay-Action") != "console" {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": "操作请求缺少控制台标记"})
+					return
+				}
+				if s.actionToken != "" && !secureEqual(r.Header.Get("X-CoralBay-Token"), s.actionToken) {
+					writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "需要管理操作令牌"})
+					return
+				}
+				if origin := r.Header.Get("Origin"); origin != "" && origin != "https://"+s.domain && origin != "http://"+r.Host {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": "请求来源不受信任"})
+					return
+				}
+				if !s.allowAction(r.RemoteAddr) {
+					writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "操作过于频繁，请稍后再试"})
+					return
+				}
 			}
 			next(w, r)
 			return
 		}
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "当前安装未启用免登录控制台"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "当前安装未启用管理控制台"})
 	}
+}
+
+func (s *server) allowAction(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.actionTimes == nil {
+		s.actionTimes = make(map[string]time.Time)
+	}
+	if previous := s.actionTimes[host]; !previous.IsZero() && now.Sub(previous) < time.Second {
+		return false
+	}
+	s.actionTimes[host] = now
+	if len(s.actionTimes) > 1024 {
+		for key, seen := range s.actionTimes {
+			if now.Sub(seen) > time.Hour {
+				delete(s.actionTimes, key)
+			}
+		}
+	}
+	return true
+}
+
+func secureEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func (s *server) currentJob(w http.ResponseWriter, _ *http.Request) {
+	s.mu.RLock()
+	job := s.job
+	s.mu.RUnlock()
+	writeJSON(w, 200, job)
+}
+
+func (s *server) audit(action, result, detail string) {
+	entry := map[string]any{"time": time.Now().UTC(), "action": action, "result": result, "detail": detail}
+	content, _ := json.Marshal(entry)
+	path := filepath.Join(s.dataDir, "audit.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err == nil {
+		defer file.Close()
+		_, _ = file.Write(append(content, '\n'))
+	}
+}
+
+func (s *server) getAudit(w http.ResponseWriter, _ *http.Request) {
+	content, _ := os.ReadFile(filepath.Join(s.dataDir, "audit.jsonl"))
+	lines := make([]string, 0)
+	if trimmed := strings.TrimSpace(string(content)); trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	if len(lines) > 200 {
+		lines = lines[len(lines)-200:]
+	}
+	writeJSON(w, 200, map[string]any{"entries": lines})
+}
+
+func (s *server) cachedLatestVersion() releaseInfo {
+	s.mu.RLock()
+	cached, checked := s.latest, s.latestChecked
+	s.mu.RUnlock()
+	if cached.Version != "" && time.Since(checked) < 30*time.Minute {
+		return cached
+	}
+	latest, url := latestVersion()
+	if latest == "" {
+		return cached
+	}
+	result := releaseInfo{Version: latest, URL: url}
+	s.mu.Lock()
+	s.latest, s.latestChecked = result, time.Now()
+	s.mu.Unlock()
+	return result
 }
 
 func (s *server) scheduler() {
@@ -402,25 +594,61 @@ func (s *server) startSync() bool {
 	}
 	s.syncing = true
 	s.lastError = ""
+	s.job = syncJob{ID: fmt.Sprintf("sync-%d", time.Now().Unix()), State: "running", Stage: "准备同步", StartedAt: time.Now().UTC()}
 	s.mu.Unlock()
+	s.audit("sync", "started", s.job.ID)
 	go func() {
 		cmd := exec.Command("/usr/local/bin/coralbay-rules-sync", "once")
 		cmd.Env = os.Environ()
-		output, err := cmd.CombinedOutput()
-		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-			if line != "" {
+		reader, writer := io.Pipe()
+		cmd.Stdout, cmd.Stderr = writer, writer
+		startErr := cmd.Start()
+		var err error
+		if startErr == nil {
+			wait := make(chan error, 1)
+			go func() { wait <- cmd.Wait(); _ = writer.Close() }()
+			scanner := bufio.NewScanner(reader)
+			for scanner.Scan() {
+				line := scanner.Text()
 				s.addLog(line)
+				s.mu.Lock()
+				s.job.Stage = syncStage(line)
+				s.mu.Unlock()
 			}
+			err = <-wait
+		} else {
+			err = startErr
 		}
+		_ = writer.Close()
+		_ = reader.Close()
 		s.mu.Lock()
 		s.syncing = false
+		s.job.FinishedAt = time.Now().UTC()
 		if err != nil {
 			s.lastError = err.Error()
+			s.job.State, s.job.Error = "failed", err.Error()
 			s.addLogLocked("同步失败: " + err.Error())
+		} else {
+			s.job.State, s.job.Stage = "completed", "发布完成"
 		}
 		s.mu.Unlock()
+		if err != nil {
+			s.audit("sync", "failed", err.Error())
+		} else {
+			s.audit("sync", "completed", "")
+		}
 	}()
 	return true
+}
+
+func syncStage(line string) string {
+	stages := []string{"同步完成", "发布", "校验", "可读规则源", "生成跨客户端", "生成客户端模板", "开始同步"}
+	for _, stage := range stages {
+		if strings.Contains(line, stage) {
+			return stage
+		}
+	}
+	return "处理中"
 }
 
 func (s *server) updateSettings(w http.ResponseWriter, r *http.Request) {
@@ -445,6 +673,7 @@ func (s *server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 	}
 	s.addLog("同步周期已调整为 " + interval.String())
+	s.audit("settings", "completed", interval.String())
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -454,6 +683,7 @@ func (s *server) updateContainer(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	s.audit("update", "started", "container")
 	go func() {
 		time.Sleep(750 * time.Millisecond)
 		req, _ := http.NewRequest(http.MethodPost, s.updaterURL, nil)
@@ -536,9 +766,15 @@ func (s *server) iconStatus() map[string]any {
 
 func (s *server) addLog(line string) { s.mu.Lock(); defer s.mu.Unlock(); s.addLogLocked(line) }
 func (s *server) addLogLocked(line string) {
-	s.logs = append(s.logs, time.Now().Format("2006-01-02 15:04:05")+" "+line)
+	formatted := time.Now().Format("2006-01-02 15:04:05") + " " + line
+	s.logs = append(s.logs, formatted)
 	if len(s.logs) > 300 {
 		s.logs = s.logs[len(s.logs)-300:]
+	}
+	file, err := os.OpenFile(filepath.Join(s.dataDir, "activity.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err == nil {
+		_, _ = file.WriteString(formatted + "\n")
+		_ = file.Close()
 	}
 }
 
@@ -549,7 +785,7 @@ func (s *server) getLogs(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"logs": logs})
 }
 
-var commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
+var commitPattern = regexp.MustCompile(`^[a-f0-9]{40}(?:-[a-f0-9]{12}-v[0-9]+\.[0-9]+\.[0-9]+-[a-f0-9]{12})?$`)
 
 func (s *server) releases(w http.ResponseWriter, _ *http.Request) {
 	entries, _ := os.ReadDir(filepath.Join(s.dataDir, "releases"))
@@ -561,7 +797,7 @@ func (s *server) releases(w http.ResponseWriter, _ *http.Request) {
 		}
 		info, _ := entry.Info()
 		path := filepath.Join(s.dataDir, "releases", entry.Name())
-		items = append(items, map[string]any{"commit": entry.Name(), "active": path == current, "modified": info.ModTime()})
+		items = append(items, map[string]any{"commit": entry.Name(), "release_id": entry.Name(), "active": path == current, "modified": info.ModTime()})
 	}
 	writeJSON(w, 200, map[string]any{"releases": items})
 }
@@ -591,6 +827,7 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.addLog("已回滚到 " + body.Commit)
+	s.audit("rollback", "completed", body.Commit)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -678,6 +915,14 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || strings.HasPrefix(r.URL.Path, "/_converted/") || r.URL.Path == "/_mirror/status.json" {
+		switch {
+		case r.URL.Path == "/_mirror/status.json":
+			w.Header().Set("Cache-Control", "no-store")
+		case strings.HasPrefix(r.URL.Path, "/_templates/"):
+			w.Header().Set("Cache-Control", "public, max-age=300")
+		default:
+			w.Header().Set("Cache-Control", "public, max-age=3600, stale-if-error=86400")
+		}
 		http.StripPrefix("/", http.FileServer(http.Dir(filepath.Join(s.dataDir, "current")))).ServeHTTP(w, r)
 		return
 	}

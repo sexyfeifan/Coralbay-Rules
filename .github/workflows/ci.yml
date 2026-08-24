@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Shell syntax
+        run: bash -n install.sh && sh -n sync.sh
+      - name: Frontend syntax
+        run: node --check web/app.js
+      - name: Docker build
+        run: docker build --build-arg VERSION=ci -t coralbay-rules:ci .
+

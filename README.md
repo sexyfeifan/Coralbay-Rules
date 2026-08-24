@@ -8,10 +8,10 @@ Docker Hub：`sexyfeifan/coralbay-rules:latest`
 ## Web 管理界面
 
 - `/`：公开状态首页，显示规则版本、校验数量和同步时间。
-- `/admin/`：免登录运维控制台，可立即同步、调整同步频率、查看证书与图标缓存、浏览规则资源、对比版本、升级容器、查看日志以及回滚规则版本。
+- `/admin/`：状态和诊断无需登录；同步、调整频率、升级、回滚等写操作需要安装时随机生成的操作令牌。令牌只保存在当前浏览器会话。
 - Docker Socket 只挂载给独立更新器；主程序无法直接操作 Docker，更新器也只匹配 `coralbay-rules` scope。
 
-仓库包含手动触发的多架构 Docker 发布工作流。使用前在 GitHub 仓库中添加
+仓库包含 Push/PR 持续集成以及 Tag/手动触发的多架构 Docker 发布工作流。发布镜像包含 OCI 来源标签、SBOM 和 provenance。使用前在 GitHub 仓库中添加
 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 Actions secrets。
 
 ## 一键安装
@@ -47,6 +47,8 @@ sudo 666
 ```
 
 管理快捷命令仅保留 `sudo rules` 和 `sudo 666`。
+
+旧版本执行 `sudo rules update` 时会自动备份并刷新 Compose 配置；如果缺少管理操作令牌，会在升级过程中生成并显示。令牌也保存在权限为 `0600` 的 `/opt/coralbay-rules/.env` 中。
 
 也可以直接执行子命令，例如 `sudo rules status`、`sudo rules sync`、`sudo rules logs` 和 `sudo rules update`。
 
@@ -88,6 +90,7 @@ Stash 模板沿用 Perfect Panel 的节点渲染逻辑，并将策略分组、�
 转换过程会去除空行、注释与重复项，将 `+.` 域名转换为 `DOMAIN-SUFFIX`，将精确域名转换为 `DOMAIN`，并区分 IPv4 `IP-CIDR` 与 IPv6 `IP-CIDR6`。sing-box JSON 固定使用兼容 1.11–1.14 的 source rule-set version 3。
 
 `release` 中少量只有 MRS、在 `geo` 分支没有公开可逆源的分类会生成零条目的合法占位文件，并在转换清单中明确显示 `0`，绝不会用空规则对象误匹配全部流量。
+清单同时记录每个 `.list` 和 JSON 产物的 SHA-256，可用于下载完整性检查。
 
 ## 可读规则详情
 
@@ -169,8 +172,11 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 ## 可靠性
 
 - 验证 PPanel Pro_cn 使用的全部 33 个 MRS 文件。
-- 新版本完整通过校验后才切换。
+- 发布 ID 由 release 提交、geo 提交、生成器版本和域名配置摘要组成；历史产物不可变。
+- 新版本在独立 staging 中完整通过校验后，通过临时链接原子切换。
+- 面板、计划任务和命令行共享跨进程同步锁，避免并发写入。
 - GitHub 同步失败时保留旧版本。
 - 保留当前版本和最近两个历史版本。
 - 默认每六小时同步，可在安装菜单中修改。
 - 支持 Linux x86_64 和 ARM64。
+- 活动日志和管理操作审计持久化到 `/data`，容器重启后仍可追踪。

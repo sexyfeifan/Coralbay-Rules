@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestNewerVersion(t *testing.T) {
 	tests := []struct {
@@ -17,6 +24,87 @@ func TestNewerVersion(t *testing.T) {
 	for _, test := range tests {
 		if got := newerVersion(test.candidate, test.current); got != test.want {
 			t.Errorf("newerVersion(%q, %q) = %v, want %v", test.candidate, test.current, got, test.want)
+		}
+	}
+}
+
+func TestSecureEqual(t *testing.T) {
+	if !secureEqual("secret", "secret") || secureEqual("secret", "wrong") || secureEqual("a", "aa") {
+		t.Fatal("constant-time token comparison returned an unexpected result")
+	}
+}
+
+func TestAdminActionToken(t *testing.T) {
+	s := &server{authDisabled: true, actionToken: "test-token"}
+	handler := s.auth(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, test := range []struct {
+		token string
+		want  int
+	}{{"", 401}, {"bad", 401}, {"test-token", 204}} {
+		req := httptest.NewRequest(http.MethodPost, "http://example.test/action", nil)
+		req.Header.Set("X-CoralBay-Action", "console")
+		req.Header.Set("X-CoralBay-Token", test.token)
+		res := httptest.NewRecorder()
+		handler(res, req)
+		if res.Code != test.want {
+			t.Fatalf("token %q: got %d, want %d", test.token, res.Code, test.want)
+		}
+	}
+}
+
+func TestRuleDetailsPaginationAndSearch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "current", "_sources", "geo", "site")
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "google.txt"), []byte("a.google.com\nb.example.com\nc.google.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{dataDir: dir}
+	req := httptest.NewRequest(http.MethodGet, "/api/public/rule-details?path=mihomo/domain/Google.mrs&q=google&page_size=1&page=2", nil)
+	res := httptest.NewRecorder()
+	s.ruleDetails(res, req)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "c.google.com") || !strings.Contains(res.Body.String(), `"count":2`) {
+		t.Fatalf("unexpected response: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestCompositeReleaseID(t *testing.T) {
+	valid := strings.Repeat("a", 40) + "-" + strings.Repeat("b", 12) + "-v3.6.0-" + strings.Repeat("c", 12)
+	if !commitPattern.MatchString(valid) || commitPattern.MatchString("../../etc/passwd") {
+		t.Fatal("release id validation failed")
+	}
+}
+
+func TestPPanelTemplateStructure(t *testing.T) {
+	files, err := filepath.Glob("templates/clients/perfect-panel/*.gotmpl")
+	if err != nil || len(files) != 15 {
+		t.Fatalf("template catalog: %v (%d files)", err, len(files))
+	}
+	for _, file := range files {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(content)
+		if len(content) < 100 || !strings.Contains(text, "{{") || !strings.Contains(text, "}}") {
+			t.Errorf("template %s is empty or does not contain template actions", file)
+		}
+		if !strings.Contains(text, ".Proxies") {
+			t.Errorf("template %s does not render PPanel proxies", file)
+		}
+	}
+}
+
+func TestNativeAdaptersUseLocalPlaceholder(t *testing.T) {
+	for _, file := range []string{"surge-tail.conf", "loon-tail.conf", "surfboard-tail.conf", "egern-tail.yaml"} {
+		content, err := os.ReadFile(filepath.Join("templates", "clients", "native", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), "__NATIVE_LIST_BASE_URL__") {
+			t.Errorf("%s bypasses the local native rule mirror", file)
 		}
 	}
 }

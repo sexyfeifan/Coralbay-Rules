@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,12 +25,14 @@ type headlessRule struct {
 }
 
 type manifestItem struct {
-	ID      string `json:"id"`
-	Kind    string `json:"kind"`
-	Source  string `json:"source"`
-	Entries int    `json:"entries"`
-	List    string `json:"list"`
-	SingBox string `json:"sing_box"`
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	Source        string `json:"source"`
+	Entries       int    `json:"entries"`
+	List          string `json:"list"`
+	SingBox       string `json:"sing_box"`
+	ListSHA256    string `json:"list_sha256"`
+	SingBoxSHA256 string `json:"sing_box_sha256"`
 }
 
 func main() {
@@ -76,10 +79,12 @@ func main() {
 func writePlaceholder(outDir, kind, name string) manifestItem {
 	listRelative := filepath.ToSlash(filepath.Join("native", "list", kind, name+".list"))
 	jsonRelative := filepath.ToSlash(filepath.Join("native", "sing-box", kind, name+".json"))
-	writeFile(filepath.Join(outDir, filepath.FromSlash(listRelative)), []byte("# Empty: 666OS geo has no public reversible source for this MRS-only category\n"))
+	listContent := []byte("# Empty: 666OS geo has no public reversible source for this MRS-only category\n")
+	writeFile(filepath.Join(outDir, filepath.FromSlash(listRelative)), listContent)
 	content, _ := json.MarshalIndent(sourceRuleSet{Version: 3, Rules: make([]headlessRule, 0)}, "", "  ")
-	writeFile(filepath.Join(outDir, filepath.FromSlash(jsonRelative)), append(content, '\n'))
-	return manifestItem{ID: kind + "-" + name, Kind: kind, Source: "MRS-only (no reversible geo source)", Entries: 0, List: listRelative, SingBox: jsonRelative}
+	jsonContent := append(content, '\n')
+	writeFile(filepath.Join(outDir, filepath.FromSlash(jsonRelative)), jsonContent)
+	return manifestItem{ID: kind + "-" + name, Kind: kind, Source: "MRS-only (no reversible geo source)", Entries: 0, List: listRelative, SingBox: jsonRelative, ListSHA256: digest(listContent), SingBoxSHA256: digest(jsonContent)}
 }
 
 func convertFile(geoDir, outDir, kind, source string) (manifestItem, error) {
@@ -134,8 +139,10 @@ func convertFile(geoDir, outDir, kind, source string) (manifestItem, error) {
 	rule := headlessRule{Domain: exact, DomainSuffix: suffix, DomainRegex: regex, IPCIDR: cidr}
 	jsonContent, _ := json.MarshalIndent(sourceRuleSet{Version: 3, Rules: []headlessRule{rule}}, "", "  ")
 	writeFile(filepath.Join(outDir, filepath.FromSlash(jsonRelative)), append(jsonContent, '\n'))
-	return manifestItem{ID: id, Kind: kind, Source: strings.TrimPrefix(filepath.ToSlash(source), filepath.ToSlash(geoDir)+"/"), Entries: len(list), List: listRelative, SingBox: jsonRelative}, nil
+	return manifestItem{ID: id, Kind: kind, Source: strings.TrimPrefix(filepath.ToSlash(source), filepath.ToSlash(geoDir)+"/"), Entries: len(list), List: listRelative, SingBox: jsonRelative, ListSHA256: digest([]byte(listContent)), SingBoxSHA256: digest(append(jsonContent, '\n'))}, nil
 }
+
+func digest(content []byte) string { return fmt.Sprintf("%x", sha256.Sum256(content)) }
 
 func writeFile(path string, content []byte) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
