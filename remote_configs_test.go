@@ -64,11 +64,29 @@ func TestRemoteConfigPresetShowsOriginalAndLocalSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := s.subscriptionPresetItems()
-	if len(items) != 89 {
-		t.Fatalf("got %d preset items, want 89 including none", len(items))
+	if len(items) != 90 {
+		t.Fatalf("got %d preset items, want 90 including built-in and none", len(items))
 	}
-	item := items[1]
+	item := items[2]
 	if !item.Cached || item.OriginalURL != source.URL || item.LocalURL != "https://rules.example.com/_configs/"+id+".ini" {
 		t.Fatalf("unexpected preset: %+v", item)
+	}
+}
+
+func TestBuiltInMihomoProPreset(t *testing.T) {
+	s := &server{dataDir: t.TempDir(), domain: "rules.example.com"}
+	items := s.subscriptionPresetItems()
+	if items[0].ID != "coralbay-mihomopro" || !items[0].BuiltIn || !items[0].Cached {
+		t.Fatalf("MihomoPro preset must be first and built in: %+v", items[0])
+	}
+	content, err := os.ReadFile("templates/subconverter/mihomopro.ini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, marker := range []string{"[custom]", "custom_proxy_group=人工智能", "ruleset=谷歌服务", "__RULES_BASE_URL__"} {
+		if !strings.Contains(text, marker) {
+			t.Errorf("MihomoPro preset missing %q", marker)
+		}
 	}
 }

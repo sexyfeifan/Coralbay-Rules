@@ -25,6 +25,7 @@ type remoteConfigPreset struct {
 	Bytes       int64     `json:"bytes,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 	Error       string    `json:"error,omitempty"`
+	BuiltIn     bool      `json:"built_in,omitempty"`
 }
 
 type remoteConfigSource struct {
@@ -67,7 +68,8 @@ func (s *server) remoteConfigErrorPath(id string) string {
 
 func (s *server) subscriptionPresetItems() []remoteConfigPreset {
 	sources := remoteConfigSources()
-	items := make([]remoteConfigPreset, 0, len(sources)+1)
+	items := make([]remoteConfigPreset, 0, len(sources)+2)
+	items = append(items, remoteConfigPreset{ID: "coralbay-mihomopro", Group: "MihomoPro（置顶）", Name: "CoralBay MihomoPro · 666OS Pro_cn", LocalURL: "https://" + s.domain + "/_configs/coralbay-mihomopro.ini", Cached: true, BuiltIn: true})
 	items = append(items, remoteConfigPreset{ID: "none", Group: "CoralBay", Name: "不使用远程配置"})
 	for _, source := range sources {
 		id := remoteConfigID(source.URL)
@@ -87,11 +89,11 @@ func (s *server) subscriptionPresets(w http.ResponseWriter, _ *http.Request) {
 	items := s.subscriptionPresetItems()
 	cached := 0
 	for _, item := range items {
-		if item.Cached {
+		if item.Cached && !item.BuiltIn {
 			cached++
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"presets": items, "total": len(items) - 1, "cached": cached, "note": "可在原链接与 CoralBay 本机镜像之间切换；失败时保留上一次成功缓存。"})
+	writeJSON(w, http.StatusOK, map[string]any{"presets": items, "total": len(remoteConfigSources()), "cached": cached, "note": "MihomoPro 是 CoralBay 内置本机预设；其他配置可在原链接与本机镜像之间切换。"})
 }
 
 func (s *server) fetchRemoteConfig(ctx context.Context, source remoteConfigSource) error {
@@ -170,7 +172,7 @@ func (s *server) refreshRemoteConfigs(ctx context.Context) remoteConfigSyncResul
 	close(jobs)
 	workers.Wait()
 	for _, item := range s.subscriptionPresetItems() {
-		if item.Cached {
+		if item.Cached && !item.BuiltIn {
 			result.Cached++
 		}
 	}
@@ -185,6 +187,18 @@ func (s *server) syncSubscriptionPresets(w http.ResponseWriter, r *http.Request)
 
 func (s *server) remoteConfigFile(w http.ResponseWriter, r *http.Request) {
 	file := r.PathValue("file")
+	if file == "coralbay-mihomopro.ini" {
+		content, err := os.ReadFile("/app/templates/subconverter/mihomopro.ini")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		content = []byte(strings.ReplaceAll(string(content), "__RULES_BASE_URL__", "https://"+s.domain+"/"))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		_, _ = w.Write(content)
+		return
+	}
 	if !strings.HasSuffix(file, ".ini") {
 		http.NotFound(w, r)
 		return
