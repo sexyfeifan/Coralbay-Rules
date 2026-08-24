@@ -12,6 +12,35 @@ function connected(ok, error = '') {
   if ($('lastRefresh')) $('lastRefresh').textContent = new Date().toLocaleString('zh-CN', {hour12:false});
 }
 
+const consoleTabs = new Set(['overview','templates','rules','subscription','activity']);
+function prepareTabs() {
+  const groups = {
+    overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
+    templates: ['#templates'],
+    rules: ['#nativeRules', '#ruleSection', '#detailPanel'],
+    subscription: ['#subscriptionConverter'],
+    activity: ['#activity']
+  };
+  document.querySelectorAll('.panel.section-space').forEach(panel => {
+    if (panel.querySelector('#conversionRows')) groups.rules.push(panel);
+    if (panel.querySelector('a[href="/_templates/MihomoPro_overwrite.conf"]')) groups.subscription.push(panel);
+  });
+  Object.entries(groups).forEach(([name, selectors]) => selectors.forEach(selector => {
+    const panel = typeof selector === 'string' ? document.querySelector(selector) : selector;
+    if (panel) { panel.dataset.panel = name; panel.classList.add('tab-panel'); }
+  }));
+}
+function activateTab(name, options = {}) {
+  const selected = consoleTabs.has(name) ? name : 'overview';
+  document.querySelectorAll('[data-tab]').forEach(button => {
+    const active = button.dataset.tab === selected;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('[data-panel]').forEach(panel => panel.classList.toggle('active', panel.dataset.panel === selected));
+  if (options.updateHash !== false && location.hash !== `#${selected}`) history.replaceState(null, '', `#${selected}`);
+}
+
 async function publicStatus() {
   if (!$('state')) return;
   try { const data=await json('/api/public/status'), status=data.status||{}; setState('state',data.syncing?'同步中':'正常',true); $('commit').textContent=short(status.commit); $('files').textContent=status.validated_files??'—'; $('synced').textContent=status.synced_at||'—'; }
@@ -21,6 +50,7 @@ async function publicStatus() {
 let detailItems = [], detailPath = '', detailName = '', detailTimer;
 async function showRuleDetails(path, name, query = '') {
   try {
+    activateTab('rules');
     detailPath=path; detailName=name; const data = await json(`/api/public/rule-details?path=${encodeURIComponent(path)}&q=${encodeURIComponent(query)}&page_size=500`);
     detailItems = data.entries || []; $('detailTitle').textContent = `${name} 规则详情`;
     $('detailMeta').textContent = `${data.count} 条匹配 · 当前显示 ${detailItems.length} 条 · ${data.source_path}`; if(!query)$('detailSearch').value = '';
@@ -100,11 +130,15 @@ async function loadAdmin() {
 async function rollback(commit) { if(!confirm(`确认回滚到 ${short(commit)}？`)) return; await json('/api/admin/rollback',{method:'POST',headers:actionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({commit})}); $('message').textContent='回滚完成'; loadAdmin(); }
 
 if ($('sync')) {
+	prepareTabs();
+	document.querySelectorAll('[data-tab]').forEach(button => button.onclick=()=>activateTab(button.dataset.tab));
+	window.addEventListener('hashchange',()=>activateTab(location.hash.slice(1),{updateHash:false}));
+	activateTab(location.hash.slice(1),{updateHash:false});
 	$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.replace('/')};
   $('sync').onclick=async()=>{try{await json('/api/admin/sync',{method:'POST',headers:actionHeaders()});$('message').textContent='同步已启动';setTimeout(()=>{loadAdmin();loadRules();loadTemplates()},1500)}catch(error){if(error.message.includes('令牌'))sessionStorage.removeItem('coralbayActionToken');$('message').textContent=error.message}};
   $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:actionHeaders()});$('message').textContent='更新器已启动，请约一分钟后刷新页面'};
   $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:actionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()};
-  $('refresh').onclick=()=>refreshAll(); $('ruleCard').onclick=()=>$('ruleSection').scrollIntoView({behavior:'smooth'});
+  $('refresh').onclick=()=>refreshAll(); $('ruleCard').onclick=()=>{activateTab('rules');requestAnimationFrame(()=>$('ruleSection').scrollIntoView({behavior:'smooth'}))};
   $('clientTemplate').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
   document.querySelectorAll('[data-copy-field]').forEach(button=>button.onclick=async()=>{const value=$(button.dataset.copyField).textContent;if(value==='（留空）')return;$('message').textContent='字段已复制';await navigator.clipboard.writeText(value)});
   $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${selected.online_url}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
