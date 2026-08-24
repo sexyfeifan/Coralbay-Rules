@@ -130,6 +130,22 @@ func TestLoonAdapterUsesNativeRulesAndRegionalFilters(t *testing.T) {
 	}
 }
 
+func TestLoonUsesRemoteConfigImportScheme(t *testing.T) {
+	for _, client := range clientTemplates {
+		if client.ID != "loon" {
+			continue
+		}
+		if client.URLScheme != "loon://import?sub=${encodeURIComponent(url)}" {
+			t.Fatalf("Loon must import the generated document as a remote config, got %q", client.URLScheme)
+		}
+		if strings.Contains(client.URLScheme, "nodelist=") {
+			t.Fatal("Loon full configuration must not be imported as a node subscription")
+		}
+		return
+	}
+	t.Fatal("Loon client metadata is missing")
+}
+
 func TestReadableSource(t *testing.T) {
 	tests := map[string]string{
 		"mihomo/domain/Google.mrs": "site/google.txt",

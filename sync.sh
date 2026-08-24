@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.1.0}"
+generator_version="${GENERATOR_VERSION:-4.1.1}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -155,6 +155,7 @@ sync_once() {
   for client in surge surfboard; do
     awk '/^\[Proxy Group\]/{exit} {print}' "/app/templates/clients/perfect-panel/$client.gotmpl" \
       > "$build_dir/_templates/clients/$client.gotmpl.next"
+    printf '\n' >> "$build_dir/_templates/clients/$client.gotmpl.next"
     sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
       "/app/templates/clients/native/$client-tail.conf" \
       >> "$build_dir/_templates/clients/$client.gotmpl.next"
@@ -162,6 +163,7 @@ sync_once() {
   done
   awk '/^\[Remote Filter\]/{exit} {print}' /app/templates/clients/perfect-panel/loon.gotmpl \
     > "$build_dir/_templates/clients/loon.gotmpl.next"
+  printf '\n' >> "$build_dir/_templates/clients/loon.gotmpl.next"
   sed -e "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
     -e "s|__RULES_BASE_URL__|$rules_base_url|g" \
     /app/templates/clients/native/loon-tail.conf \
@@ -169,6 +171,7 @@ sync_once() {
   mv -f "$build_dir/_templates/clients/loon.gotmpl.next" "$build_dir/_templates/clients/loon.gotmpl"
   awk '/^policy_groups:/{exit} {print}' /app/templates/clients/perfect-panel/egern.gotmpl \
     > "$build_dir/_templates/clients/egern.gotmpl.next"
+  printf '\n' >> "$build_dir/_templates/clients/egern.gotmpl.next"
   sed "s|__NATIVE_LIST_BASE_URL__|$native_list_base_url|g" \
     /app/templates/clients/native/egern-tail.yaml \
     >> "$build_dir/_templates/clients/egern.gotmpl.next"
@@ -212,6 +215,23 @@ sync_once() {
   [ -s "$build_dir/_converted/manifest.json" ]
   [ -s "$build_dir/_templates/clients/clash.gotmpl" ]
   [ -s "$build_dir/_templates/clients/stash.gotmpl" ]
+  validate_ini_template() {
+    template="$1"; shift
+    previous=0
+    for section in "$@"; do
+      count="$(grep -Fxc "[$section]" "$template")"
+      [ "$count" -eq 1 ] || { log "校验失败：$(basename "$template") 的 [$section] 出现 $count 次" >&2; return 1; }
+      line="$(grep -Fn "[$section]" "$template" | cut -d: -f1)"
+      [ "$line" -gt "$previous" ] || { log "校验失败：$(basename "$template") 的 [$section] 顺序错误" >&2; return 1; }
+      previous="$line"
+    done
+  }
+  validate_ini_template "$build_dir/_templates/clients/loon.gotmpl" "Proxy" "Remote Filter" "Proxy Group" "Rewrite" "Remote Rule" "Rule"
+  validate_ini_template "$build_dir/_templates/clients/surge.gotmpl" "Proxy" "Proxy Group" "Rule"
+  validate_ini_template "$build_dir/_templates/clients/surfboard.gotmpl" "Proxy" "Proxy Group" "Rule"
+  if awk '/^\[Proxy\]/{proxy=1;next} /^\[/{proxy=0} proxy && /rules\.coralbay\.top|__RULES_BASE_URL__|__NATIVE_LIST_BASE_URL__/{exit 1}' "$build_dir/_templates/clients/loon.gotmpl"; then :; else
+    log "校验失败：Loon 规则 URL 混入 [Proxy] 节点区" >&2; return 1
+  fi
   if find "$build_dir" -type l -print | grep -q .; then
     log "校验失败：发布产物中不允许符号链接" >&2
     return 1

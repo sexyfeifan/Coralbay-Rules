@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-var version = "4.1.0"
+var version = "4.1.1"
 
 //go:embed web/*
 var webFS embed.FS
@@ -86,7 +86,7 @@ var clientTemplates = []clientTemplate{
 	{"clash", "Clash / Mihomo / OpenClash", "yaml", true, "adapted", "666OS Pro_cn：33 个本地 MRS 规则与本地图标", "Clash", "Clash", "yaml", "clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}"},
 	{"stash", "Stash", "yaml", true, "adapted", "完整改造：666OS Pro_cn 策略分组、地区测速/均衡与 33 个本地 MRS 规则", "Stash", "Stash", "yaml", "stash://install-config?url=${encodeURIComponent(url)}"},
 	{"surge", "Surge", "conf", true, "adapted", "已生成 666OS Geo 原生 RULE-SET，并映射 Pro_cn 策略分组", "Surge", "Surge", "conf", "surge:///install-config?url=${encodeURIComponent(url)}"},
-	{"loon", "Loon", "conf", true, "adapted", "完整改造：官方节点语法、Pro_cn 地区筛选/测速组与 666OS Surge 原生远程规则", "Loon", "Loon", "conf", ""},
+	{"loon", "Loon", "conf", true, "adapted", "完整配置：必须作为远程配置导入（不是节点订阅）；包含官方节点语法、Pro_cn 地区筛选/测速组与 666OS 远程规则", "Loon", "Loon", "conf", "loon://import?sub=${encodeURIComponent(url)}"},
 	{"shadowrocket", "Shadowrocket", "txt", false, "nodes-only", "官方模板输出节点 URI，不包含策略组和规则路由", "Shadowrocket", "Shadowrocket", "base64", "shadowrocket://add/sub://${window.btoa(url)}?remark=${encodeURIComponent(name)}"},
 	{"quantumult-x", "Quantumult X", "conf", false, "nodes-only", "官方模板输出节点资源，不是完整分流配置", "Quantumult X", "Quantumult X", "conf", ""},
 	{"quantumult", "Quantumult", "conf", false, "nodes-only", "官方模板仅输出节点，不包含策略组和规则路由", "Quantumult", "Quantumult", "conf", ""},
