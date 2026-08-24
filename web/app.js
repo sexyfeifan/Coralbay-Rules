@@ -110,6 +110,18 @@ let nativeItems=[];
 function renderNative(){const query=($('nativeSearch').value||'').toLowerCase(),platform=$('nativePlatform').value;const items=nativeItems.filter(item=>(!platform||item.platform===platform)&&(!query||item.path.toLowerCase().includes(query)));$('nativeRows').innerHTML=items.slice(0,500).map(item=>`<tr><td><strong>${escapeHTML(item.platform)}</strong></td><td><code>${escapeHTML(item.path)}</code></td><td>${escapeHTML(item.format)}</td><td>${size(item.bytes)}</td><td><a href="${escapeHTML(item.url)}" target="_blank">打开</a> · <button class="link-button" data-native-url="${escapeHTML(item.url)}">复制</button></td></tr>`).join('')||'<tr><td colspan="5">没有匹配文件</td></tr>';document.querySelectorAll('[data-native-url]').forEach(button=>button.onclick=async()=>navigator.clipboard.writeText(button.dataset.nativeUrl));}
 async function loadNative(){const data=await json('/api/public/native-rules');nativeItems=data.rules||[];$('nativeCount').textContent=`${data.count||0} 个文件`;renderNative()}
 
+const targetCompatibility = {
+  clash: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
+  singbox: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
+  surge: ['warning','Surge 无法表达 VLESS Reality。若订阅全部是 VLESS，验证会拒绝生成空配置。'],
+  shadowrocket: ['ok','支持当前 VLESS Reality 节点；不支持的协议会由后端过滤并报告。'],
+  quanx: ['ok','支持当前 VLESS Reality 节点；部分新协议可能无法输出。'],
+  loon: ['ok','支持当前 VLESS Reality 节点，生成的是完整 Loon 配置。'],
+  v2ray: ['ok','输出 Base64 节点链接，不包含策略组与规则。']
+};
+function updateSubCompatibility(){const [state,text]=targetCompatibility[$('subTarget').value]||['warning','请先选择目标客户端'];$('subCompatibility').className=`template-note compatibility-${state}`;$('subCompatibility').textContent=text}
+async function loadSubconverterStatus(){try{const data=await json('/api/admin/subconverter/status');$('subBackendState').textContent=data.ok?`本机后端 · ${data.version}`:'后端异常';$('subBackendState').classList.toggle('bad',!data.ok)}catch(error){$('subBackendState').textContent='后端不可用';$('subBackendState').classList.add('bad')}}
+
 async function loadAdmin() {
   try {
     const data=await json('/api/admin/status'), status=data.status||{}, certificate=data.certificate||{}, icons=data.icons||{};
@@ -144,10 +156,11 @@ if ($('sync')) {
   $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${selected.online_url}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
   $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
 	$('nativeSearch').oninput=renderNative; $('nativePlatform').onchange=renderNative;
-	$('generateSub').onclick=async()=>{try{const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:$('subTarget').value,url:$('subURLs').value.trim(),emoji:$('subEmoji').checked,rename:$('subRename').checked})});$('subResultURL').textContent=data.url;$('subResult').classList.remove('hidden');$('message').textContent='带签名订阅链接已生成'}catch(error){$('message').textContent=error.message}};
+	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility(); loadSubconverterStatus();
+	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{const urls=$('subURLs').value.split(/[\n|]+/).map(value=>value.trim()).filter(Boolean).join('|');$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:$('subTarget').value,url:urls,config:$('subConfig').value.trim(),filename:$('subFilename').value.trim(),interval:Number($('subInterval').value)||24,emoji:$('subEmoji').checked,sort:$('subSort').checked,dedup:$('subDedup').checked,udp:$('subUDP').checked,tfo:$('subTFO').checked,scv:$('subSCV').checked,append_type:$('subAppendType').checked})});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可用节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可用节点`;feedback.classList.add('ok')}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
 	$('copySubResult').onclick=async()=>{await navigator.clipboard.writeText($('subResultURL').textContent);$('message').textContent='订阅链接已复制'};
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{clearTimeout(detailTimer);detailTimer=setTimeout(()=>showRuleDetails(detailPath,detailName,$('detailSearch').value),250)};
-  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
+  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
   refreshAll();
 }
 publicStatus();

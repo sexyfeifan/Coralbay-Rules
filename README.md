@@ -85,7 +85,7 @@ OpenClash 的 `MihomoPro_overwrite.conf` 会在每次同步时从 666OS/YYDS 下
 
 ## 订阅链接转换
 
-Compose 内置官方 `tindy2013/subconverter` 后端，但不直接暴露其端口。管理员在控制台输入最多 5 个 HTTP/HTTPS 订阅地址并选择 Clash、Surge、Quantumult X、Loon、Surfboard、V2Ray 或 SS 目标后，CoralBay 会生成 HMAC 签名的 `/sub` 地址。客户端可以直接长期订阅该地址；签名只允许转换生成时指定的来源与目标，不能修改参数后将服务用作任意代理。
+Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端口。它支持 VLESS Reality、Hysteria2、TUIC、AnyTLS 等现代协议，并可输出 Clash/Mihomo、sing-box、Surge、Shadowrocket、Quantumult X、Loon 和 V2Ray。管理员输入最多 5 个 HTTP/HTTPS 订阅地址后，CoralBay 会先实际转换并检查可用节点数量，验证通过才生成 HMAC 签名的 `/sub` 地址；不兼容目标（例如全 VLESS 订阅转 Surge）会明确拒绝，不发布空配置。签名只允许转换生成时指定的来源与参数，后端仅在 Compose 内网提供服务，订阅不会发送给第三方公共转换站。
 
 同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：
 

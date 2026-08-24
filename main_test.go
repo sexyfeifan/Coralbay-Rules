@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,26 @@ func TestNewerVersion(t *testing.T) {
 	for _, test := range tests {
 		if got := newerVersion(test.candidate, test.current); got != test.want {
 			t.Errorf("newerVersion(%q, %q) = %v, want %v", test.candidate, test.current, got, test.want)
+		}
+	}
+}
+
+func TestConvertedNodeCount(t *testing.T) {
+	tests := []struct {
+		target, content string
+		want            int
+	}{
+		{"surge", "[General]\nloglevel=notify\n[Proxy]\nA = ss, host, 443\nB = vmess, host, 443\n[Rule]\nFINAL,DIRECT\n", 2},
+		{"surge", "[General]\nloglevel=notify\n", 0},
+		{"loon", "[Proxy]\nA = VLESS,host,443,id\n[Remote Rule]\nhttps://rules.example/a, policy = DIRECT\n", 1},
+		{"quanx", "[server_local]\nvless=host:443, password=id, tag=A\n", 1},
+		{"clash", "proxies:\n  - name: A\n    type: vless\nproxy-groups:\n  - name: Proxy\n", 1},
+		{"singbox", `{"outbounds":[{"type":"direct","tag":"direct"},{"type":"vless","tag":"A"}]}`, 1},
+		{"v2ray", base64.StdEncoding.EncodeToString([]byte("vless://a\nvmess://b\n")), 2},
+	}
+	for _, test := range tests {
+		if got := convertedNodeCount(test.target, []byte(test.content)); got != test.want {
+			t.Errorf("convertedNodeCount(%s) = %d, want %d", test.target, got, test.want)
 		}
 	}
 }

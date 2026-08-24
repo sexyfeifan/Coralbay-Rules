@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -26,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.1.1"
+var version = "4.2.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -165,6 +166,7 @@ func main() {
 	mux.HandleFunc("PUT /api/admin/settings", s.auth(s.updateSettings))
 	mux.HandleFunc("POST /api/admin/update", s.auth(s.updateContainer))
 	mux.HandleFunc("GET /api/admin/audit", s.auth(s.getAudit))
+	mux.HandleFunc("GET /api/admin/subconverter/status", s.auth(s.subconverterStatus))
 	mux.HandleFunc("POST /api/admin/subscription-link", s.auth(s.createSubscriptionLink))
 	mux.HandleFunc("GET /sub", s.signedSubscription)
 	mux.HandleFunc("GET /downloads/CoralBay_OpenClash_PPanel_Template.yaml", s.downloadTemplate)
@@ -335,7 +337,7 @@ func (s *server) nativeRuleCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "rules": items})
 }
 
-var allowedTargets = map[string]bool{"clash": true, "clashr": true, "quan": true, "quanx": true, "loon": true, "ss": true, "sssub": true, "ssd": true, "ssr": true, "surfboard": true, "surge": true, "v2ray": true}
+var allowedTargets = map[string]bool{"clash": true, "singbox": true, "surge": true, "shadowrocket": true, "quanx": true, "loon": true, "v2ray": true}
 
 func validateSubscriptionURLs(raw string) error {
 	parts := strings.Split(raw, "|")
@@ -362,10 +364,18 @@ func validateSubscriptionURLs(raw string) error {
 
 func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Target string `json:"target"`
-		URL    string `json:"url"`
-		Emoji  bool   `json:"emoji"`
-		Rename bool   `json:"rename"`
+		Target     string `json:"target"`
+		URL        string `json:"url"`
+		Config     string `json:"config"`
+		Filename   string `json:"filename"`
+		Emoji      bool   `json:"emoji"`
+		Sort       bool   `json:"sort"`
+		Dedup      bool   `json:"dedup"`
+		UDP        bool   `json:"udp"`
+		TFO        bool   `json:"tfo"`
+		SCV        bool   `json:"scv"`
+		AppendType bool   `json:"append_type"`
+		Interval   int    `json:"interval"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&body) != nil || !allowedTargets[body.Target] {
 		writeJSON(w, 400, map[string]string{"error": "转换目标无效"})
@@ -375,17 +385,160 @@ func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	params := url.Values{"target": {body.Target}, "url": {body.URL}}
-	if body.Emoji {
-		params.Set("emoji", "true")
+	if body.Config != "" {
+		if strings.Contains(body.Config, "|") || validateSubscriptionURLs(body.Config) != nil {
+			writeJSON(w, 400, map[string]string{"error": "远程配置必须是单个可访问的 HTTP/HTTPS 地址"})
+			return
+		}
 	}
-	if body.Rename {
-		params.Set("rename", "true")
+	if body.Interval == 0 {
+		body.Interval = 24
+	}
+	if body.Interval < 1 || body.Interval > 720 {
+		writeJSON(w, 400, map[string]string{"error": "更新间隔必须为 1 到 720 小时"})
+		return
+	}
+	if len(body.Filename) > 80 || strings.ContainsAny(body.Filename, "/\\\r\n") {
+		writeJSON(w, 400, map[string]string{"error": "订阅名称无效"})
+		return
+	}
+	params := url.Values{"target": {body.Target}, "url": {body.URL}}
+	params.Set("emoji", strconv.FormatBool(body.Emoji))
+	params.Set("sort", strconv.FormatBool(body.Sort))
+	params.Set("dedup", strconv.FormatBool(body.Dedup))
+	params.Set("udp", strconv.FormatBool(body.UDP))
+	params.Set("tfo", strconv.FormatBool(body.TFO))
+	params.Set("scv", strconv.FormatBool(body.SCV))
+	params.Set("append_type", strconv.FormatBool(body.AppendType))
+	params.Set("interval", strconv.Itoa(body.Interval))
+	if body.Config != "" {
+		params.Set("config", body.Config)
+	}
+	if body.Filename != "" {
+		params.Set("filename", body.Filename)
+	}
+	content, headers, err := s.convertSubscription(r.Context(), params)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	nodes := convertedNodeCount(body.Target, content)
+	if nodes == 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "转换结果没有可用节点：目标客户端不支持当前订阅中的节点协议。VLESS Reality 不能输出到 Surge，请改用 Clash/Mihomo、sing-box、Shadowrocket、Quantumult X、Loon 或 V2Ray。"})
+		return
 	}
 	canonical := params.Encode()
 	link := "https://" + s.domain + "/sub?" + canonical + "&sig=" + url.QueryEscape(s.sign(canonical))
-	s.audit("subscription-link", "completed", body.Target)
-	writeJSON(w, http.StatusOK, map[string]string{"url": link})
+	s.audit("subscription-link", "completed", fmt.Sprintf("%s nodes=%d", body.Target, nodes))
+	writeJSON(w, http.StatusOK, map[string]any{"url": link, "node_count": nodes, "content_type": headers.Get("Content-Type"), "validated": true})
+}
+
+func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]byte, http.Header, error) {
+	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("无法创建转换请求")
+	}
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("转换后端不可用：%v", err)
+	}
+	defer resp.Body.Close()
+	content, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if readErr != nil {
+		return nil, nil, fmt.Errorf("读取转换结果失败")
+	}
+	if resp.StatusCode != http.StatusOK {
+		detail := strings.TrimSpace(string(content))
+		if len(detail) > 240 {
+			detail = detail[:240]
+		}
+		if detail == "" {
+			detail = resp.Status
+		}
+		return nil, nil, fmt.Errorf("转换后端返回错误：%s", detail)
+	}
+	return content, resp.Header.Clone(), nil
+}
+
+func (s *server) subconverterStatus(w http.ResponseWriter, r *http.Request) {
+	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, strings.TrimRight(s.subconverterURL, "/")+"/version", nil)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	content, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode == http.StatusOK, "version": strings.TrimSpace(string(content)), "self_hosted": true, "supports_modern_protocols": true})
+}
+
+func convertedNodeCount(target string, content []byte) int {
+	text := string(content)
+	section := ""
+	wanted := map[string]string{"surge": "Proxy", "shadowrocket": "Proxy", "loon": "Proxy", "quanx": "server_local"}[target]
+	if wanted != "" {
+		count := 0
+		for _, raw := range strings.Split(text, "\n") {
+			line := strings.TrimSpace(raw)
+			if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+				section = strings.Trim(line, "[]")
+				continue
+			}
+			if section == wanted && line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, "=") {
+				count++
+			}
+		}
+		return count
+	}
+	if target == "clash" {
+		inProxies, count := false, 0
+		for _, line := range strings.Split(text, "\n") {
+			if line == "proxies:" {
+				inProxies = true
+				continue
+			}
+			if inProxies && len(line) > 0 && line[0] != ' ' {
+				break
+			}
+			if inProxies && strings.HasPrefix(strings.TrimSpace(line), "type:") {
+				count++
+			}
+		}
+		return count
+	}
+	if target == "singbox" {
+		var doc struct {
+			Outbounds []struct {
+				Type string `json:"type"`
+				Tag  string `json:"tag"`
+			} `json:"outbounds"`
+		}
+		if json.Unmarshal(content, &doc) != nil {
+			return 0
+		}
+		count := 0
+		for _, outbound := range doc.Outbounds {
+			if !map[string]bool{"direct": true, "block": true, "dns": true, "selector": true, "urltest": true}[outbound.Type] {
+				count++
+			}
+		}
+		return count
+	}
+	if target == "v2ray" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text))
+		if err != nil {
+			return 0
+		}
+		count := 0
+		for _, line := range strings.Split(string(decoded), "\n") {
+			if strings.Contains(line, "://") {
+				count++
+			}
+		}
+		return count
+	}
+	return 0
 }
 
 func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
@@ -397,29 +550,34 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid subscription link", http.StatusForbidden)
 		return
 	}
-	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + params.Encode()
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
-	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	content, headers, err := s.convertSubscription(r.Context(), params)
 	if err != nil {
-		http.Error(w, "conversion backend unavailable", http.StatusBadGateway)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "conversion failed", http.StatusBadGateway)
+	if convertedNodeCount(target, content) == 0 {
+		http.Error(w, "转换结果没有目标客户端可用的节点", http.StatusUnprocessableEntity)
 		return
 	}
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("Content-Type", headers.Get("Content-Type"))
+	for _, header := range []string{"Subscription-Userinfo", "Profile-Update-Interval"} {
+		if value := headers.Get(header); value != "" {
+			w.Header().Set(header, value)
+		}
+	}
 	extension := "txt"
 	if target == "clash" || target == "clashr" {
 		extension = "yaml"
 	}
-	if target == "surge" || target == "quan" || target == "quanx" || target == "loon" || target == "surfboard" {
+	if target == "surge" || target == "shadowrocket" || target == "quanx" || target == "loon" {
 		extension = "conf"
+	}
+	if target == "singbox" {
+		extension = "json"
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="CoralBay_Subscription_`+target+`.`+extension+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 16<<20))
+	_, _ = w.Write(content)
 }
 
 func (s *server) publicDiagnostics(w http.ResponseWriter, _ *http.Request) {

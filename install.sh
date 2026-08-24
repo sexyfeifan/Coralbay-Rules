@@ -141,7 +141,7 @@ services:
       - "127.0.0.1:${LOCAL_PORT}:8080"
 
   subconverter:
-    image: tindy2013/subconverter:latest
+    image: ghcr.io/jungley8/subconverter-ng:latest
     container_name: coralbay-subconverter
     restart: unless-stopped
 
