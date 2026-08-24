@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-3.6.0}"
+generator_version="${GENERATOR_VERSION:-3.6.1}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 
@@ -234,7 +234,9 @@ EOF
   fi
   current_next="/data/.current.$$"
   ln -s "releases/$release_id" "$current_next"
-  mv -f "$current_next" /data/current
+  # -T is essential on BusyBox: without it an existing directory symlink is
+  # followed and the temporary link is moved inside the active release.
+  mv -Tf "$current_next" /data/current
 
   # 保留当前版本以及最近两个历史版本。
   ls -1dt /data/releases/* 2>/dev/null | awk 'NR > 3' | while IFS= read -r old_release; do
