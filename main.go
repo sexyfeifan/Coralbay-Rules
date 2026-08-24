@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.7.0"
+var version = "4.8.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -354,7 +354,7 @@ func (s *server) nativeRuleCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(items), "rules": items})
 }
 
-var allowedTargets = map[string]bool{"clash": true, "clashr": true, "singbox": true, "surge": true, "surfboard": true, "shadowrocket": true, "quan": true, "quanx": true, "loon": true, "v2ray": true, "ss": true, "ssr": true, "trojan": true, "mixed": true}
+var allowedTargets = map[string]bool{"clash": true, "stash": true, "clashr": true, "singbox": true, "surge": true, "surfboard": true, "shadowrocket": true, "quan": true, "quanx": true, "loon": true, "v2ray": true, "ss": true, "ssr": true, "trojan": true, "mixed": true}
 
 func validateSubscriptionURLs(raw string) error {
 	parts := strings.Split(raw, "|")
@@ -451,7 +451,13 @@ func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]byte, http.Header, error) {
-	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + params.Encode()
+	upstreamParams := cloneURLValues(params)
+	if upstreamParams.Get("target") == "stash" {
+		// subconverter has no Stash target. Stash consumes Clash.Meta YAML;
+		// retain "stash" in the signed public URL while using clash upstream.
+		upstreamParams.Set("target", "clash")
+	}
+	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + upstreamParams.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("无法创建转换请求")
@@ -476,6 +482,14 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 		return nil, nil, fmt.Errorf("转换后端返回错误：%s", detail)
 	}
 	return content, resp.Header.Clone(), nil
+}
+
+func cloneURLValues(source url.Values) url.Values {
+	cloned := make(url.Values, len(source))
+	for key, values := range source {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
 }
 
 func (s *server) subconverterStatus(w http.ResponseWriter, r *http.Request) {
@@ -508,7 +522,7 @@ func convertedNodeCount(target string, content []byte) int {
 		}
 		return count
 	}
-	if target == "clash" || target == "clashr" {
+	if target == "clash" || target == "stash" || target == "clashr" {
 		inProxies, count := false, 0
 		for _, line := range strings.Split(text, "\n") {
 			if line == "proxies:" {
@@ -583,7 +597,7 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	extension := "txt"
-	if target == "clash" || target == "clashr" {
+	if target == "clash" || target == "stash" || target == "clashr" {
 		extension = "yaml"
 	}
 	if target == "surge" || target == "surfboard" || target == "shadowrocket" || target == "quan" || target == "quanx" || target == "loon" {

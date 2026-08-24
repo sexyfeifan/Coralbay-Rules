@@ -121,6 +121,7 @@ async function loadNative(){const data=await json('/api/public/native-rules');na
 
 const targetCompatibility = {
   clash: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
+  stash: ['ok','输出 Stash 兼容的 Clash.Meta YAML；VLESS Reality/Vision 需要 Stash 3.1.1 或更高版本。'],
   clashr: ['warning','旧版 ClashR 格式，不支持现代 VLESS Reality 等节点。'],
   singbox: ['ok','适合现代节点：支持 VLESS Reality、Hysteria2、TUIC、AnyTLS。'],
   surge: ['warning','Surge 无法表达 VLESS Reality。若订阅全部是 VLESS，验证会拒绝生成空配置。'],

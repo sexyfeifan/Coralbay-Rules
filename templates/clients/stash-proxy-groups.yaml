@@ -5,10 +5,12 @@ x-filter-jp: &filter-jp '(?i)(日本|东京|大阪|京都|神奈川|琦玉|JP|NR
 x-filter-sg: &filter-sg '(?i)(新加坡|坡县|狮城|SG|SIN|XSP|Singapore|🇸🇬)'
 x-filter-kr: &filter-kr '(?i)(韩国|韓國|首尔|首爾|南朝鲜|KR|ICN|GMP|PUS|Korea|Seoul|🇰🇷)'
 x-filter-us: &filter-us '(?i)(美国|美东|美西|美中|美南|美港|美日|中美|US|USA|LAX|SFO|JFK|SJC|America|United States|🇺🇸)'
+x-filter-eu: &filter-eu '(?i)(德国|英国|法国|荷兰|瑞士|瑞典|挪威|芬兰|丹麦|意大利|西班牙|波兰|奥地利|爱尔兰|DE|GER|Germany|UK|GB|London|France|FR|NL|Europe|EU|🇩🇪|🇬🇧|🇫🇷|🇳🇱)'
+x-filter-sea: &filter-sea '(?i)(越南|泰国|马来西亚|菲律宾|印度尼西亚|印尼|柬埔寨|缅甸|老挝|VN|Vietnam|TH|Thailand|MY|Malaysia|PH|Philippines|ID|Indonesia|🇻🇳|🇹🇭|🇲🇾|🇵🇭|🇮🇩)'
 
 proxy-groups:
   - { name: 广告拦截, type: select, proxies: [REJECT-DROP, REJECT, DIRECT], icon: __ASSETS_BASE_URL__Reject.png }
-  - { name: 网络测试, type: select, proxies: [故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, DIRECT], icon: __ASSETS_BASE_URL__Speedtest.png }
+  - { name: 网络测试, type: select, proxies: [全球自动, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, 欧洲策略, 东南亚策略, DIRECT], icon: __ASSETS_BASE_URL__Speedtest.png }
   - { name: 即时通讯, type: select, proxies: [狮城策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 韩国策略, 美国策略, DIRECT], icon: __ASSETS_BASE_URL__Telegram_X.png }
   - { name: 社交平台, type: select, proxies: [美国策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, DIRECT], icon: __ASSETS_BASE_URL__Twitter.png }
   - { name: 人工智能, type: select, proxies: [美国策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, DIRECT], icon: __ASSETS_BASE_URL__AI.png }
@@ -21,10 +23,11 @@ proxy-groups:
   - { name: 脸书服务, type: select, proxies: [美国策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, DIRECT], icon: __ASSETS_BASE_URL__Facebook.png }
   - { name: 微软服务, type: select, proxies: [美国策略, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, DIRECT], icon: __ASSETS_BASE_URL__Microsoft.png }
   - { name: 苹果服务, type: select, proxies: [DIRECT, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略], icon: __ASSETS_BASE_URL__Apple_1.png }
-  - { name: 国外流量, type: select, proxies: [故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, DIRECT], icon: __ASSETS_BASE_URL__Global.png }
+  - { name: 国外流量, type: select, proxies: [全球自动, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, 欧洲策略, 东南亚策略, DIRECT], icon: __ASSETS_BASE_URL__Global.png }
   - { name: 国内流量, type: select, proxies: [DIRECT, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略], icon: __ASSETS_BASE_URL__China.png }
-  - { name: 漏网之鱼, type: select, proxies: [故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, DIRECT], icon: __ASSETS_BASE_URL__Final.png }
-  - { name: 故障转移, type: fallback, proxies: [美国策略, 日本策略, 狮城策略, 韩国策略, 香港策略, 台湾策略], interval: 300, icon: __ASSETS_BASE_URL__ULB.png }
+  - { name: 漏网之鱼, type: select, proxies: [全球自动, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, 欧洲策略, 东南亚策略, DIRECT], icon: __ASSETS_BASE_URL__Final.png }
+  - { name: 故障转移, type: fallback, include-all: true, url: https://www.gstatic.com/generate_204, interval: 300, icon: __ASSETS_BASE_URL__ULB.png }
+  - { name: 全球自动, type: url-test, include-all: true, url: https://www.gstatic.com/generate_204, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 全球手动, type: select, include-all: true, icon: __ASSETS_BASE_URL__Clubhouse.png }
   - { name: 香港策略, type: select, proxies: [香港自动, 香港均衡], include-all: true, filter: *filter-hk, icon: __ASSETS_BASE_URL__Hong_Kong.png }
   - { name: 台湾策略, type: select, proxies: [台湾自动, 台湾均衡], include-all: true, filter: *filter-tw, icon: __ASSETS_BASE_URL__Taiwan.png }
@@ -32,12 +35,16 @@ proxy-groups:
   - { name: 狮城策略, type: select, proxies: [狮城自动, 狮城均衡], include-all: true, filter: *filter-sg, icon: __ASSETS_BASE_URL__Singapore.png }
   - { name: 韩国策略, type: select, proxies: [韩国自动, 韩国均衡], include-all: true, filter: *filter-kr, icon: __ASSETS_BASE_URL__Korea.png }
   - { name: 美国策略, type: select, proxies: [美国自动, 美国均衡], include-all: true, filter: *filter-us, icon: __ASSETS_BASE_URL__United_States.png }
+  - { name: 欧洲策略, type: select, proxies: [欧洲自动, 全球自动, 故障转移, 全球手动], include-all: true, filter: *filter-eu, icon: __ASSETS_BASE_URL__Global.png }
+  - { name: 东南亚策略, type: select, proxies: [东南亚自动, 全球自动, 故障转移, 全球手动], include-all: true, filter: *filter-sea, icon: __ASSETS_BASE_URL__Global.png }
   - { name: 香港自动, type: url-test, include-all: true, filter: *filter-hk, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 台湾自动, type: url-test, include-all: true, filter: *filter-tw, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 日本自动, type: url-test, include-all: true, filter: *filter-jp, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 狮城自动, type: url-test, include-all: true, filter: *filter-sg, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 韩国自动, type: url-test, include-all: true, filter: *filter-kr, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 美国自动, type: url-test, include-all: true, filter: *filter-us, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
+  - { name: 欧洲自动, type: url-test, include-all: true, filter: *filter-eu, url: https://www.gstatic.com/generate_204, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
+  - { name: 东南亚自动, type: url-test, include-all: true, filter: *filter-sea, url: https://www.gstatic.com/generate_204, interval: 300, icon: __ASSETS_BASE_URL__Auto.png }
   - { name: 香港均衡, type: load-balance, include-all: true, filter: *filter-hk, interval: 300, strategy: consistent-hashing, icon: __ASSETS_BASE_URL__Round_Robin_1.png }
   - { name: 台湾均衡, type: load-balance, include-all: true, filter: *filter-tw, interval: 300, strategy: consistent-hashing, icon: __ASSETS_BASE_URL__Round_Robin_1.png }
   - { name: 日本均衡, type: load-balance, include-all: true, filter: *filter-jp, interval: 300, strategy: consistent-hashing, icon: __ASSETS_BASE_URL__Round_Robin_1.png }

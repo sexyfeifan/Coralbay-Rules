@@ -41,6 +41,38 @@ func TestSubscriptionParamsRejectInvalidRegex(t *testing.T) {
 	}
 }
 
+func TestStashTargetUsesModernClashShape(t *testing.T) {
+	params, err := subscriptionParams(subscriptionRequest{Target: "stash", URL: "https://1.1.1.1/sub", Interval: 24, ClashDoH: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.Get("target") != "stash" || params.Get("clash.doh") != "true" {
+		t.Fatalf("unexpected Stash params: %v", params)
+	}
+	cloned := cloneURLValues(params)
+	cloned.Set("target", "clash")
+	if params.Get("target") != "stash" || cloned.Get("target") != "clash" {
+		t.Fatal("target alias mutated signed parameters")
+	}
+	content := []byte("proxies:\n  - name: example\n    type: vless\nproxy-groups:\n")
+	if got := convertedNodeCount("stash", content); got != 1 {
+		t.Fatalf("Stash node count = %d, want 1", got)
+	}
+}
+
+func TestMihomoProPresetHasGlobalAndRegionalFallbacks(t *testing.T) {
+	content, err := os.ReadFile("templates/subconverter/mihomopro.ini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, marker := range []string{"全球自动`url-test`.*", "故障转移`fallback`.*", "欧洲自动", "东南亚自动", "https://www.gstatic.com/generate_204"} {
+		if !strings.Contains(text, marker) {
+			t.Errorf("missing Stash-safe preset marker %q", marker)
+		}
+	}
+}
+
 func TestValidateSignedSubscriptionLink(t *testing.T) {
 	s := &server{domain: "rules.example.com", adminPassword: "password", actionToken: "token"}
 	p := url.Values{"target": {"clash"}, "url": {"https://example.com/sub"}, "emoji": {"true"}}

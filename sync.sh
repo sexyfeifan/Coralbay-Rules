@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.7.0}"
+generator_version="${GENERATOR_VERSION:-4.8.0}"
 generator_version="${generator_version#v}"
 lock_dir="/data/.sync.lock"
 

@@ -64,6 +64,7 @@ func (s *server) subscriptionCapabilities(w http.ResponseWriter, _ *http.Request
 		"self_hosted": true,
 		"targets": []map[string]any{
 			{"id": "clash", "name": "Clash Meta / Mihomo", "modern": true, "vless_reality": true},
+			{"id": "stash", "name": "Stash 3.1.1+", "modern": true, "vless_reality": true, "warning": "Reality/Vision 需要 Stash 3.1.1 或更高版本"},
 			{"id": "clashr", "name": "ClashR", "modern": false, "vless_reality": false},
 			{"id": "singbox", "name": "sing-box", "modern": true, "vless_reality": true},
 			{"id": "loon", "name": "Loon", "modern": true, "vless_reality": true},
@@ -150,7 +151,7 @@ func subscriptionParams(body subscriptionRequest) (url.Values, error) {
 			p.Set("surge.doh", "true")
 		}
 	}
-	if body.Target == "clash" && body.ClashDoH {
+	if (body.Target == "clash" || body.Target == "stash") && body.ClashDoH {
 		p.Set("clash.doh", "true")
 	}
 	if body.Target == "singbox" && body.SingboxIPv6 {
