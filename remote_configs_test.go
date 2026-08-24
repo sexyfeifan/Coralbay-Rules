@@ -44,6 +44,12 @@ func TestRuleResourcesAppearBeforeConvertedCatalog(t *testing.T) {
 	if !strings.Contains(text, "🤌") {
 		t.Fatal("project icon is missing")
 	}
+	if !strings.Contains(text, `data-tab="overwrite">MihomoPro 覆写`) || !strings.Contains(text, `id="overwritePanel"`) {
+		t.Fatal("MihomoPro overwrite must have its own tab")
+	}
+	if !strings.Contains(text, `class="template-legend"`) {
+		t.Fatal("PPanel template capability legend is missing")
+	}
 }
 
 func TestRemoteConfigPresetShowsOriginalAndLocalSources(t *testing.T) {

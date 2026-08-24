@@ -12,18 +12,18 @@ function connected(ok, error = '') {
   if ($('lastRefresh')) $('lastRefresh').textContent = new Date().toLocaleString('zh-CN', {hour12:false});
 }
 
-const consoleTabs = new Set(['overview','templates','rules','subscription','activity']);
+const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity']);
 function prepareTabs() {
   const groups = {
     overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
     templates: ['#templates'],
+    overwrite: ['#overwritePanel'],
     rules: ['#nativeRules', '#ruleSection', '#detailPanel'],
     subscription: ['#subscriptionConverter'],
     activity: ['#activity']
   };
   document.querySelectorAll('.panel.section-space').forEach(panel => {
     if (panel.querySelector('#conversionRows')) groups.rules.push(panel);
-    if (panel.querySelector('a[href="/_templates/MihomoPro_overwrite.conf"]')) groups.templates.push(panel);
   });
   Object.entries(groups).forEach(([name, selectors]) => selectors.forEach(selector => {
     const panel = typeof selector === 'string' ? document.querySelector(selector) : selector;
@@ -87,8 +87,7 @@ function selectTemplate() {
 }
 async function loadTemplates() {
   const data = await json('/api/public/templates'); templateItems = data.templates || [];
-  const label = item => item.capability === 'adapted' ? '🟢 已改造' : item.capability === 'converted' ? '🔵 已转换规则源' : item.capability === 'convertible' ? '🟡 可改造' : '⚪ 仅节点 / 不适用';
-  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${label(item)} · ${escapeHTML(item.name)}</option>`).join('');
+  $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('');
   selectTemplate();
 }
 
@@ -130,7 +129,7 @@ function updateSubCompatibility(){const target=$('subTarget').value,[state,text]
 async function loadSubconverterStatus(){try{const data=await json('/api/admin/subconverter/status');$('subBackendState').textContent=data.ok?`本机后端 · ${data.version}`:'后端异常';$('subBackendState').classList.toggle('bad',!data.ok)}catch(error){$('subBackendState').textContent='后端不可用';$('subBackendState').classList.add('bad')}}
 
 let subscriptionPresets=[];
-function applySubscriptionPreset(){const preset=subscriptionPresets.find(item=>item.id===$('subPreset').value);if(!preset)return;const local=$('subPresetSource').value==='local';if(local&&!preset.cached){$('subConfig').value='';$('subPresetDetail').innerHTML=`<span class="bad">本机镜像尚未缓存，请先点击“立即更新本机镜像”。</span> 原链接：${escapeHTML(preset.original_url||'无')}`;return}$('subConfig').value=preset.id==='none'?'':(local?preset.local_url:preset.original_url);const state=preset.id==='none'?'不使用远程配置':preset.cached?`<span class="ok">● 已缓存 · ${size(preset.bytes)}</span>`:'<span class="bad">● 尚未缓存</span>';$('subPresetDetail').innerHTML=`${state}${preset.updated_at?` · 更新于 ${new Date(preset.updated_at).toLocaleString('zh-CN',{hour12:false})}`:''}${preset.error?`<br><span class="bad">最近同步错误：${escapeHTML(preset.error)}</span>`:''}`}
+function applySubscriptionPreset(){const preset=subscriptionPresets.find(item=>item.id===$('subPreset').value);if(!preset)return;let local=$('subPresetSource').value==='local';let fallback='';if(local&&!preset.cached){$('subPresetSource').value='original';local=false;fallback='<span class="warning">本机尚无该配置，已自动回退原链接。</span><br>'}$('subConfig').value=preset.id==='none'?'':(local?preset.local_url:preset.original_url);const state=preset.id==='none'?'不使用远程配置':preset.cached?`<span class="ok">● 已缓存 · ${size(preset.bytes)}</span>`:'<span class="bad">○ 未缓存，仅可使用原链接</span>';$('subPresetDetail').innerHTML=`${fallback}${state} · 当前调用：${local?'CoralBay 本机镜像':'原链接'}${preset.updated_at?` · 更新于 ${new Date(preset.updated_at).toLocaleString('zh-CN',{hour12:false})}`:''}${preset.error?`<br><span class="bad">最近同步错误：${escapeHTML(preset.error)}</span>`:''}`}
 async function loadSubscriptionPresets(){const data=await json('/api/admin/subscription-presets');subscriptionPresets=data.presets||[];const groups=[];for(const item of subscriptionPresets){let group=groups.find(value=>value.name===item.group);if(!group){group={name:item.group,items:[]};groups.push(group)}group.items.push(item)}$('subPreset').innerHTML=groups.map(group=>`<optgroup label="${escapeHTML(group.name)}">${group.items.map(item=>`<option value="${escapeHTML(item.id)}">${item.cached?'●':'○'} ${escapeHTML(item.name)}</option>`).join('')}</optgroup>`).join('');$('subPresetCache').textContent=`${data.cached||0} / ${data.total||0} 已缓存`;$('subPreset').onchange=applySubscriptionPreset;$('subPresetSource').onchange=applySubscriptionPreset;applySubscriptionPreset()}
 async function loadSubscriptionCapabilities(){const data=await json('/api/admin/subscription-capabilities');const modern=(data.targets||[]).filter(item=>item.modern).length;$('subCapabilities').textContent=`${(data.targets||[]).length} 种输出 · ${modern} 种现代协议`;}
 async function loadSubscriptionHistory(){const data=await json('/api/admin/subscription-history'),items=data.history||[];$('subHistoryRows').innerHTML=items.map(item=>`<tr><td>${new Date(item.created_at).toLocaleString('zh-CN',{hour12:false})}</td><td><strong>${escapeHTML(item.target)}</strong><br><small>${escapeHTML(item.filename||'未命名')}</small></td><td>${item.node_count}</td><td><small>${item.config?'远程配置':'仅节点转换'}</small></td><td><button class="link-button" data-history-copy="${escapeHTML(item.url)}">复制</button> · <a href="${escapeHTML(item.url)}" target="_blank" rel="noreferrer">打开</a></td></tr>`).join('')||'<tr><td colspan="5" class="muted">暂无生成记录</td></tr>';document.querySelectorAll('[data-history-copy]').forEach(button=>button.onclick=async()=>{await navigator.clipboard.writeText(button.dataset.historyCopy);$('message').textContent='历史订阅链接已复制'})}
