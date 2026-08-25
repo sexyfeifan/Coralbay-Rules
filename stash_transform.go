@@ -60,6 +60,7 @@ func transformStashSubscription(content []byte, iconsBase string) []byte {
 
 func stashProxyRenames(section string) map[string]string {
 	renamed := map[string]string{}
+	codeFlags := map[string]string{"HK": "🇭🇰", "TW": "🇹🇼", "JP": "🇯🇵", "SG": "🇸🇬", "KR": "🇰🇷", "US": "🇺🇸", "DE": "🇩🇪", "VN": "🇻🇳", "GB": "🇬🇧", "UK": "🇬🇧", "FR": "🇫🇷", "NL": "🇳🇱", "TH": "🇹🇭", "MY": "🇲🇾", "PH": "🇵🇭", "ID": "🇮🇩", "CA": "🇨🇦", "AU": "🇦🇺", "IN": "🇮🇳"}
 	for _, line := range strings.Split(section, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "- name:") {
@@ -68,6 +69,13 @@ func stashProxyRenames(section string) map[string]string {
 		name := parseYAMLScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")))
 		if name == "" || hasLeadingFlag(name) {
 			continue
+		}
+		upper := strings.ToUpper(name)
+		if len(upper) >= 3 {
+			if flag := codeFlags[upper[:2]]; flag != "" && strings.Contains("-_ ", upper[2:3]) {
+				renamed[name] = flag + " " + name
+				continue
+			}
 		}
 		for _, country := range stashCountryFlags {
 			if country.pattern.MatchString(name) {
