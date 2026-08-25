@@ -1,10 +1,86 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
+
+func restoreStashVLESSFields(ctx context.Context, sources string, content []byte) []byte {
+	type fields struct{ spiderX, encryption string }
+	original := map[string]fields{}
+	client := &http.Client{Timeout: 20 * time.Second}
+	for _, source := range strings.Split(sources, "|") {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(source), nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Stash")
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		for _, token := range strings.Fields(string(body)) {
+			u, err := url.Parse(token)
+			if err != nil || !strings.EqualFold(u.Scheme, "vless") {
+				continue
+			}
+			values := fields{spiderX: u.Query().Get("spx"), encryption: u.Query().Get("encryption")}
+			if values.spiderX != "" || values.encryption != "" {
+				original[u.User.Username()] = values
+			}
+		}
+	}
+	if len(original) == 0 {
+		return content
+	}
+	lines := strings.Split(string(content), "\n")
+	for start := 0; start < len(lines); {
+		if !strings.HasPrefix(lines[start], "    - ") {
+			start++
+			continue
+		}
+		end := start + 1
+		for end < len(lines) && !strings.HasPrefix(lines[end], "    - ") && lines[end] != "proxy-groups:" {
+			end++
+		}
+		uuid, realityIndex := "", -1
+		for i := start; i < end; i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(trimmed, "uuid:") {
+				uuid = parseYAMLScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "uuid:")))
+			}
+			if trimmed == "reality-opts:" {
+				realityIndex = i
+			}
+		}
+		if value := original[uuid]; value.spiderX != "" && realityIndex >= 0 {
+			insertAt := realityIndex + 1
+			for insertAt < end && strings.HasPrefix(lines[insertAt], "        ") {
+				insertAt++
+			}
+			lines = append(lines[:insertAt], append([]string{"        spider-x: " + strconv.QuoteToGraphic(value.spiderX)}, lines[insertAt:]...)...)
+			end++
+		}
+		if value := original[uuid].encryption; value != "" {
+			insertAt := start + 1
+			lines = append(lines[:insertAt], append([]string{"      encryption: " + strconv.QuoteToGraphic(value)}, lines[insertAt:]...)...)
+			end++
+		}
+		start = end
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
 
 var stashCountryFlags = []struct {
 	flag    string

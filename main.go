@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.8.4"
+var version = "4.8.5"
 
 //go:embed web/*
 var webFS embed.FS
@@ -483,6 +483,7 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 	}
 	if params.Get("target") == "stash" {
 		content = transformStashSubscription(content, "https://"+s.domain+"/_assets/icons/")
+		content = restoreStashVLESSFields(ctx, params.Get("url"), content)
 	}
 	return content, resp.Header.Clone(), nil
 }
