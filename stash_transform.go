@@ -110,6 +110,7 @@ var stashGroupIcons = map[string]string{
 	"全球手动": "Clubhouse.png", "全球自动": "Auto.png", "故障转移": "ULB.png",
 	"香港自动": "Hong_Kong.png", "台湾自动": "Taiwan.png", "日本自动": "Japan.png", "狮城自动": "Singapore.png", "韩国自动": "Korea.png", "美国自动": "United_States.png", "欧洲自动": "Global.png", "东南亚自动": "Global.png",
 	"香港策略": "Hong_Kong.png", "台湾策略": "Taiwan.png", "日本策略": "Japan.png", "狮城策略": "Singapore.png", "韩国策略": "Korea.png", "美国策略": "United_States.png", "欧洲策略": "Global.png", "东南亚策略": "Global.png",
+	"香港均衡": "Round_Robin_1.png", "台湾均衡": "Round_Robin_1.png", "日本均衡": "Round_Robin_1.png", "狮城均衡": "Round_Robin_1.png", "韩国均衡": "Round_Robin_1.png", "美国均衡": "Round_Robin_1.png", "欧洲均衡": "Round_Robin_1.png", "东南亚均衡": "Round_Robin_1.png",
 	"广告拦截": "Reject.png", "网络测试": "Speedtest.png", "即时通讯": "Telegram_X.png", "社交平台": "Twitter.png", "人工智能": "AI.png", "开发服务": "GitHub.png", "EMBY": "Emby.png", "国际媒体": "Streaming.png", "游戏平台": "Game.png", "货币平台": "Cryptocurrency_3.png", "谷歌服务": "Google_Search.png", "脸书服务": "Facebook.png", "微软服务": "Microsoft.png", "苹果服务": "Apple_1.png", "国外流量": "Global.png", "国内流量": "China.png", "漏网之鱼": "Final.png",
 }
 
@@ -276,7 +277,7 @@ func stashGroupName(group string) string {
 }
 
 func orderStashGroups(groups []string) []string {
-	order := []string{"香港策略", "台湾策略", "日本策略", "狮城策略", "韩国策略", "美国策略", "欧洲策略", "东南亚策略", "香港自动", "台湾自动", "日本自动", "狮城自动", "韩国自动", "美国自动", "欧洲自动", "东南亚自动", "全球手动", "全球自动", "故障转移"}
+	order := []string{"香港策略", "台湾策略", "日本策略", "狮城策略", "韩国策略", "美国策略", "欧洲策略", "东南亚策略", "香港自动", "台湾自动", "日本自动", "狮城自动", "韩国自动", "美国自动", "欧洲自动", "东南亚自动", "香港均衡", "台湾均衡", "日本均衡", "狮城均衡", "韩国均衡", "美国均衡", "欧洲均衡", "东南亚均衡", "全球手动", "全球自动", "故障转移"}
 	result, used := make([]string, 0, len(groups)), make([]bool, len(groups))
 	for _, name := range order {
 		for i, group := range groups {

@@ -80,9 +80,11 @@ func TestMihomoProPresetHasGlobalAndRegionalFallbacks(t *testing.T) {
 		}
 	}
 	for _, marker := range []string{
-		"香港策略`select`[]香港自动`[]故障转移`[]全球手动`[]DIRECT`(?i)(香港|",
-		"日本策略`select`[]日本自动`[]故障转移`[]全球手动`[]DIRECT`(?i)(日本|",
-		"美国策略`select`[]美国自动`[]故障转移`[]全球手动`[]DIRECT`(?i)(美国|",
+		"香港均衡`load-balance`(?i)(香港|",
+		"日本均衡`load-balance`(?i)(日本|",
+		"香港策略`select`[]香港自动`[]香港均衡`[]故障转移`[]全球手动`[]DIRECT`(?i)(香港|",
+		"日本策略`select`[]日本自动`[]日本均衡`[]故障转移`[]全球手动`[]DIRECT`(?i)(日本|",
+		"美国策略`select`[]美国自动`[]美国均衡`[]故障转移`[]全球手动`[]DIRECT`(?i)(美国|",
 	} {
 		if !strings.Contains(text, marker) {
 			t.Errorf("regional manual group must include matching nodes: missing %q", marker)

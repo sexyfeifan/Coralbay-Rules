@@ -43,4 +43,7 @@ func TestTransformStashSubscription(t *testing.T) {
 	if !strings.Contains(got, "    - MATCH,漏网之鱼") || !strings.Contains(got, "behavior: classical") {
 		t.Fatal("Stash transformation must install native rule providers")
 	}
+	if strings.Index(got, "media:\n") > strings.Index(got, "google-domain:\n") {
+		t.Fatal("international media rules must be evaluated before Google rules")
+	}
 }
