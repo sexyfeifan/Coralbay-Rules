@@ -139,7 +139,43 @@ func transformStashSubscription(content []byte, iconsBase string) []byte {
 		pattern := regexp.MustCompile(`(?m)^(\s*- (?:name: )?)(` + code + `[-_ ][^\r\n"']+)$`)
 		result = pattern.ReplaceAllString(result, `${1}"`+flag+` ${2}"`)
 	}
-	return []byte(result)
+	return []byte(installStashRuleProviders(result, strings.TrimSuffix(iconsBase, "_assets/icons/")))
+}
+
+func installStashRuleProviders(content, baseURL string) string {
+	boundary := len(content)
+	for _, marker := range []string{"\nrule-providers:\n", "\nrules:\n"} {
+		if index := strings.Index(content, marker); index >= 0 && index < boundary {
+			boundary = index
+		}
+	}
+	type provider struct{ name, policy, path string }
+	providers := []provider{
+		{"advertising", "广告拦截", "site/advertising.list"}, {"connectivity", "网络测试", "site/connectivity-check.list"},
+		{"telegram", "即时通讯", "site/telegram.list"}, {"social", "社交平台", "site/category-social-media-!cn.list"},
+		{"ai", "人工智能", "site/category-ai-!cn.list"}, {"development", "开发服务", "site/category-dev.list"},
+		{"emby", "EMBY", "site/emby.list"}, {"media", "国际媒体", "site/category-media.list"},
+		{"games", "游戏平台", "site/category-games.list"}, {"cryptocurrency", "货币平台", "site/category-cryptocurrency.list"},
+		{"google-domain", "谷歌服务", "site/google.list"}, {"google-ip", "谷歌服务", "ip/google.list"},
+		{"facebook", "脸书服务", "site/facebook.list"}, {"microsoft", "微软服务", "site/microsoft.list"},
+		{"apple", "苹果服务", "site/apple.list"}, {"global", "国外流量", "site/geolocation-!cn.list"},
+		{"cn-domain", "国内流量", "site/cn.list"}, {"cn-ip", "国内流量", "ip/cn.list"},
+	}
+	var out strings.Builder
+	out.WriteString(strings.TrimRight(content[:boundary], "\n"))
+	out.WriteString("\nrule-providers:\n")
+	for _, item := range providers {
+		out.WriteString("    " + item.name + ":\n")
+		out.WriteString("      type: http\n      behavior: classical\n      format: text\n")
+		out.WriteString("      url: " + baseURL + "_converted/native/list/" + item.path + "\n")
+		out.WriteString("      interval: 86400\n")
+	}
+	out.WriteString("rules:\n")
+	for _, item := range providers {
+		out.WriteString("    - RULE-SET," + item.name + "," + item.policy + "\n")
+	}
+	out.WriteString("    - GEOIP,CN,国内流量\n    - MATCH,漏网之鱼\n")
+	return out.String()
 }
 
 func stashProxyRenames(section string) map[string]string {
