@@ -68,10 +68,10 @@ func stashProxyRenames(section string) map[string]string {
 	codeFlags := map[string]string{"HK": "🇭🇰", "TW": "🇹🇼", "JP": "🇯🇵", "SG": "🇸🇬", "KR": "🇰🇷", "US": "🇺🇸", "DE": "🇩🇪", "VN": "🇻🇳", "GB": "🇬🇧", "UK": "🇬🇧", "FR": "🇫🇷", "NL": "🇳🇱", "TH": "🇹🇭", "MY": "🇲🇾", "PH": "🇵🇭", "ID": "🇮🇩", "CA": "🇨🇦", "AU": "🇦🇺", "IN": "🇮🇳"}
 	for _, line := range strings.Split(section, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "- name:") {
+		if !strings.HasPrefix(trimmed, "- name:") && !strings.HasPrefix(trimmed, "name:") {
 			continue
 		}
-		name := parseYAMLScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")))
+		name := parseYAMLScalar(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "- "), "name:")))
 		if name == "" || hasLeadingFlag(name) {
 			continue
 		}
@@ -98,6 +98,8 @@ func applyStashRenames(text string, renamed map[string]string) string {
 		trimmed, prefix, value := strings.TrimSpace(line), "", ""
 		if strings.HasPrefix(trimmed, "- name:") {
 			prefix, value = line[:strings.Index(line, "- name:")+len("- name:")]+" ", strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:"))
+		} else if strings.HasPrefix(trimmed, "name:") {
+			prefix, value = line[:strings.Index(line, "name:")+len("name:")]+" ", strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
 		} else if strings.HasPrefix(trimmed, "- ") {
 			prefix, value = line[:strings.Index(line, "- ")+2], strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
 		}
