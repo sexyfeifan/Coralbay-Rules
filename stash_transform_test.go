@@ -40,4 +40,7 @@ func TestTransformStashSubscription(t *testing.T) {
 	if !strings.Contains(got, "url: http://www.apple.com/") || strings.Contains(got, "gstatic.com") {
 		t.Fatal("Stash health checks must use the Stash-compatible Apple endpoint")
 	}
+	if !strings.Contains(got, "    - MATCH,DIRECT") {
+		t.Fatal("Stash transformation must preserve the complete rules section")
+	}
 }

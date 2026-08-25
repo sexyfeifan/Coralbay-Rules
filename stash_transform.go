@@ -208,16 +208,17 @@ func hasLeadingFlag(name string) bool {
 }
 
 func splitStashGroups(rest string) ([]string, string) {
-	lines, groups, current, suffix := strings.SplitAfter(rest, "\n"), []string{}, "", ""
-	for _, line := range lines {
+	boundary, offset := len(rest), 0
+	for _, line := range strings.SplitAfter(rest, "\n") {
 		if len(line) > 0 && line[0] != ' ' {
-			if current != "" {
-				groups = append(groups, current)
-				current = ""
-			}
-			suffix += line
-			continue
+			boundary = offset
+			break
 		}
+		offset += len(line)
+	}
+	groupText, suffix := rest[:boundary], rest[boundary:]
+	lines, groups, current := strings.SplitAfter(groupText, "\n"), []string{}, ""
+	for _, line := range lines {
 		if strings.HasPrefix(line, "    - name:") {
 			if current != "" {
 				groups = append(groups, current)
