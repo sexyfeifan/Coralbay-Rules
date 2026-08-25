@@ -51,8 +51,12 @@ func TestStashTargetUsesModernClashShape(t *testing.T) {
 	}
 	cloned := cloneURLValues(params)
 	cloned.Set("target", "clash")
+	cloned.Set("expand", "true")
 	if params.Get("target") != "stash" || cloned.Get("target") != "clash" {
 		t.Fatal("target alias mutated signed parameters")
+	}
+	if cloned.Get("expand") != "true" {
+		t.Fatal("Stash conversion must expand preset rules")
 	}
 	content := []byte("proxies:\n  - name: example\n    type: vless\nproxy-groups:\n")
 	if got := convertedNodeCount("stash", content); got != 1 {
