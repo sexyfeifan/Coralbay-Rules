@@ -123,6 +123,26 @@ func TestPPanelTemplateStructure(t *testing.T) {
 	}
 }
 
+func TestMihomoTemplatesCoverRegionalAndUnmatchedNodes(t *testing.T) {
+	for _, file := range []string{"templates/ppanel_openclash_pro_cn.gotmpl", "templates/openclash/Pro_cn.upstream.yaml"} {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(content)
+		for _, marker := range []string{
+			"x-filter-eu:", "x-filter-sea:", "x-filter-other:",
+			"欧洲策略", "欧洲自动", "欧洲均衡",
+			"东南亚策略", "东南亚自动", "东南亚均衡",
+			"其他地区策略", "其他地区自动", "其他地区均衡",
+		} {
+			if !strings.Contains(text, marker) {
+				t.Errorf("%s does not cover %q", file, marker)
+			}
+		}
+	}
+}
+
 func TestNativeAdaptersUseLocalPlaceholder(t *testing.T) {
 	for _, file := range []string{"surge-tail.conf", "surfboard-tail.conf", "egern-tail.yaml"} {
 		content, err := os.ReadFile(filepath.Join("templates", "clients", "native", file))
