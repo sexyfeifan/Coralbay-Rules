@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.8.8"
+var version = "4.8.9"
 
 //go:embed web/*
 var webFS embed.FS
@@ -460,6 +460,7 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 		// into the generated profile; otherwise the converter emits empty rules
 		// and requests fall through to DIRECT.
 		upstreamParams.Set("expand", "true")
+		upstreamParams.Set("expand_rulesets", "true")
 	}
 	upstream := strings.TrimRight(s.subconverterURL, "/") + "/sub?" + upstreamParams.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
