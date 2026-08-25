@@ -114,7 +114,10 @@ var stashGroupIcons = map[string]string{
 }
 
 func transformStashSubscription(content []byte, iconsBase string) []byte {
-	text := strings.ReplaceAll(string(content), "      servername:", "      sni:")
+	// Stash's VLESS Reality YAML schema follows Clash.Meta and uses
+	// `servername`; keep the converter's original field instead of rewriting
+	// it to the generic TLS alias `sni`.
+	text := string(content)
 	parts := strings.SplitN(text, "proxy-groups:\n", 2)
 	if len(parts) != 2 {
 		return []byte(text)
