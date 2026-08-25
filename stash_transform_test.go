@@ -24,7 +24,7 @@ func TestRestoreStashVLESSFields(t *testing.T) {
 }
 
 func TestTransformStashSubscription(t *testing.T) {
-	input := "proxies:\n    - name: VN-1\n      type: vless\n      servername: example.com\n    - name: DE-1\n      type: vless\n      servername: example.org\nproxy-groups:\n    - name: 广告拦截\n      type: select\n      proxies:\n        - DIRECT\n    - name: 欧洲策略\n      type: select\n      proxies:\n        - DE-1\n    - name: 东南亚策略\n      type: select\n      proxies:\n        - VN-1\nrules:\n    - MATCH,DIRECT\n"
+	input := "proxies:\n    - name: VN-1\n      type: vless\n      servername: example.com\n    - name: DE-1\n      type: vless\n      servername: example.org\nproxy-groups:\n    - name: 广告拦截\n      type: select\n      proxies:\n        - DIRECT\n    - name: 欧洲策略\n      type: url-test\n      proxies:\n        - DE-1\n      url: https://www.gstatic.com/generate_204\n    - name: 东南亚策略\n      type: select\n      proxies:\n        - VN-1\nrules:\n    - MATCH,DIRECT\n"
 	got := string(transformStashSubscription([]byte(input), "https://rules.example/_assets/icons/"))
 	for _, expected := range []string{"servername: example.com", `name: "🇻🇳 VN-1"`, `- "🇩🇪 DE-1"`, "icon: https://rules.example/_assets/icons/Global.png"} {
 		if !strings.Contains(got, expected) {
@@ -36,5 +36,8 @@ func TestTransformStashSubscription(t *testing.T) {
 	}
 	if strings.Contains(got, "\n      sni:") {
 		t.Fatal("Stash VLESS Reality output must keep servername")
+	}
+	if !strings.Contains(got, "url: http://www.apple.com/") || strings.Contains(got, "gstatic.com") {
+		t.Fatal("Stash health checks must use the Stash-compatible Apple endpoint")
 	}
 }

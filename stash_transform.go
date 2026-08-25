@@ -117,7 +117,7 @@ func transformStashSubscription(content []byte, iconsBase string) []byte {
 	// Stash's VLESS Reality YAML schema follows Clash.Meta and uses
 	// `servername`; keep the converter's original field instead of rewriting
 	// it to the generic TLS alias `sni`.
-	text := string(content)
+	text := strings.ReplaceAll(string(content), "https://www.gstatic.com/generate_204", "http://www.apple.com/")
 	parts := strings.SplitN(text, "proxy-groups:\n", 2)
 	if len(parts) != 2 {
 		return []byte(text)
