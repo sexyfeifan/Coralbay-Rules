@@ -55,7 +55,12 @@ func transformStashSubscription(content []byte, iconsBase string) []byte {
 			groups[i] = strings.Join(lines, "\n")
 		}
 	}
-	return []byte(parts[0] + "proxy-groups:\n" + strings.Join(orderStashGroups(groups), "") + suffix)
+	result := parts[0] + "proxy-groups:\n" + strings.Join(orderStashGroups(groups), "") + suffix
+	for code, flag := range map[string]string{"VN": "🇻🇳", "TH": "🇹🇭", "MY": "🇲🇾", "PH": "🇵🇭", "ID": "🇮🇩", "CA": "🇨🇦", "AU": "🇦🇺", "IN": "🇮🇳", "GB": "🇬🇧", "UK": "🇬🇧", "FR": "🇫🇷", "NL": "🇳🇱"} {
+		pattern := regexp.MustCompile(`(?m)^(\s*- (?:name: )?)(` + code + `[-_ ][^\r\n"']+)$`)
+		result = pattern.ReplaceAllString(result, `${1}"`+flag+` ${2}"`)
+	}
+	return []byte(result)
 }
 
 func stashProxyRenames(section string) map[string]string {
