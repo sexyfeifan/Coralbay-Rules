@@ -20,15 +20,15 @@ x-url-test:     &url-test     { type: url-test, url: "https://www.gstatic.com/ge
 x-load-balance: &load-balance { type: load-balance, url: "https://www.gstatic.com/generate_204", interval: 300, empty-fallback: REJECT, include-all: true, hidden: true, strategy: consistent-hashing }
 x-fallback:     &fallback     { type: fallback, url: "https://www.gstatic.com/generate_204", interval: 300, empty-fallback: REJECT }
 
-x-filter-hk:    &filter-hk    "^(?i)(?=.*(香港|港深|深港|沪港|广港|陆港|(?<![a-zA-Z])(hk|hkg)(?![a-zA-Z])|hongkong|hong kong|🇭🇰))(?!.*(排除)).*$"
-x-filter-tw:    &filter-tw    "^(?i)(?=.*(台湾|台北|台中|台南|台东|湾湾|(?<![a-zA-Z])(tw|tpe|khh|tsa)(?![a-zA-Z])|taiwan|taipei|🇹🇼|🇼🇸))(?!.*(排除)).*$"
-x-filter-jp:    &filter-jp    "^(?i)(?=.*(日本|东京|大阪|京都|神奈川|琦玉|(?<![a-zA-Z])(jp|nrt|hnd|kix|cts|fuk)(?![a-zA-Z])|japan|tokyo|🇯🇵))(?!.*(排除)).*$"
-x-filter-sg:    &filter-sg    "^(?i)(?=.*(新加坡|坡县|坡|狮城|(?<![a-zA-Z])(sg|sin|xsp)(?![a-zA-Z])|singapore|🇸🇬))(?!.*(排除)).*$"
-x-filter-kr:    &filter-kr    "^(?i)(?=.*(韩国|韓國|首尔|首爾|南朝鲜|(?<![a-zA-Z])(kr|icn|gmp|pus)(?![a-zA-Z])|korea|seoul|🇰🇷))(?!.*(排除)).*$"
-x-filter-us:    &filter-us    "^(?i)(?=.*(美国|美东|美西|美中|美南|美港|美日|中美|美专|(?<![a-zA-Z])(us|usa|lax|sfo|jfk|sjc)(?![a-zA-Z])|america|united states|🇺🇸))(?!.*(排除)).*$"
-x-filter-eu:    &filter-eu    "^(?i)(?=.*(德国|英国|法国|荷兰|瑞士|瑞典|挪威|芬兰|丹麦|意大利|西班牙|波兰|奥地利|爱尔兰|葡萄牙|比利时|捷克|希腊|(?<![a-zA-Z])(de|ger|uk|gb|fr|nl|ch|se|no|fi|dk|it|es|pl|at|ie|pt|be|cz|gr)(?![a-zA-Z])|germany|united kingdom|france|netherlands|europe|🇩🇪|🇬🇧|🇫🇷|🇳🇱))(?!.*(排除)).*$"
-x-filter-sea:   &filter-sea   "^(?i)(?=.*(越南|泰国|马来西亚|菲律宾|印度尼西亚|印尼|柬埔寨|缅甸|老挝|(?<![a-zA-Z])(vn|th|my|ph|id|kh|mm|la)(?![a-zA-Z])|vietnam|thailand|malaysia|philippines|indonesia|🇻🇳|🇹🇭|🇲🇾|🇵🇭|🇮🇩))(?!.*(排除)).*$"
-x-filter-other: &filter-other "^(?i)(?!.*(香港|台湾|日本|新加坡|狮城|韩国|美国|德国|英国|法国|荷兰|瑞士|瑞典|挪威|芬兰|丹麦|意大利|西班牙|波兰|奥地利|爱尔兰|葡萄牙|比利时|捷克|希腊|越南|泰国|马来西亚|菲律宾|印度尼西亚|印尼|柬埔寨|缅甸|老挝|hong ?kong|taiwan|japan|tokyo|singapore|korea|seoul|america|united states|germany|united kingdom|france|netherlands|europe|vietnam|thailand|malaysia|philippines|indonesia|🇭🇰|🇹🇼|🇯🇵|🇸🇬|🇰🇷|🇺🇸|🇩🇪|🇬🇧|🇫🇷|🇳🇱|🇻🇳|🇹🇭|🇲🇾|🇵🇭|🇮🇩|排除)).+$"
+x-filter-hk: &filter-hk "(?i)(?:香港|港深|深港|沪港|广港|陆港|hong ?kong|🇭🇰|(?:^|[^a-zA-Z])(?:hk|hkg)(?:[^a-zA-Z]|$))"
+x-filter-tw: &filter-tw "(?i)(?:台湾|台北|台中|台南|台东|湾湾|taiwan|taipei|🇹🇼|🇼🇸|(?:^|[^a-zA-Z])(?:tw|tpe|khh|tsa)(?:[^a-zA-Z]|$))"
+x-filter-jp: &filter-jp "(?i)(?:日本|东京|大阪|京都|神奈川|琦玉|japan|tokyo|🇯🇵|(?:^|[^a-zA-Z])(?:jp|nrt|hnd|kix|cts|fuk)(?:[^a-zA-Z]|$))"
+x-filter-sg: &filter-sg "(?i)(?:新加坡|坡县|狮城|singapore|🇸🇬|(?:^|[^a-zA-Z])(?:sg|sin|xsp)(?:[^a-zA-Z]|$))"
+x-filter-kr: &filter-kr "(?i)(?:韩国|韓國|首尔|首爾|南朝鲜|korea|seoul|🇰🇷|(?:^|[^a-zA-Z])(?:kr|icn|gmp|pus)(?:[^a-zA-Z]|$))"
+x-filter-us: &filter-us "(?i)(?:美国|美东|美西|美中|美南|美港|美日|中美|美专|america|united states|🇺🇸|(?:^|[^a-zA-Z])(?:us|usa|lax|sfo|jfk|sjc)(?:[^a-zA-Z]|$))"
+x-filter-eu: &filter-eu "(?i)(?:德国|英国|法国|荷兰|瑞士|瑞典|挪威|芬兰|丹麦|意大利|西班牙|波兰|奥地利|爱尔兰|葡萄牙|比利时|捷克|希腊|germany|united kingdom|france|netherlands|europe|🇩🇪|🇬🇧|🇫🇷|🇳🇱|🇨🇭|🇸🇪|🇳🇴|🇫🇮|🇩🇰|🇮🇹|🇪🇸|🇵🇱|🇦🇹|🇮🇪|🇵🇹|🇧🇪|🇨🇿|🇬🇷|(?:^|[^a-zA-Z])(?:de|ger|uk|gb|fr|nl|ch|se|no|fi|dk|it|es|pl|at|ie|pt|be|cz|gr)(?:[^a-zA-Z]|$))"
+x-filter-sea: &filter-sea "(?i)(?:越南|泰国|马来西亚|菲律宾|印度尼西亚|印尼|柬埔寨|缅甸|老挝|vietnam|thailand|malaysia|philippines|indonesia|🇻🇳|🇹🇭|🇲🇾|🇵🇭|🇮🇩|🇰🇭|🇲🇲|🇱🇦|(?:^|[^a-zA-Z])(?:vn|th|my|ph|id|kh|mm|la)(?:[^a-zA-Z]|$))"
+x-filter-other: &filter-other "(?i)(?:(?:香港|港深|深港|沪港|广港|陆港|hong ?kong|🇭🇰|(?:^|[^a-zA-Z])(?:hk|hkg)(?:[^a-zA-Z]|$))|(?:台湾|台北|台中|台南|台东|湾湾|taiwan|taipei|🇹🇼|🇼🇸|(?:^|[^a-zA-Z])(?:tw|tpe|khh|tsa)(?:[^a-zA-Z]|$))|(?:日本|东京|大阪|京都|神奈川|琦玉|japan|tokyo|🇯🇵|(?:^|[^a-zA-Z])(?:jp|nrt|hnd|kix|cts|fuk)(?:[^a-zA-Z]|$))|(?:新加坡|坡县|狮城|singapore|🇸🇬|(?:^|[^a-zA-Z])(?:sg|sin|xsp)(?:[^a-zA-Z]|$))|(?:韩国|韓國|首尔|首爾|南朝鲜|korea|seoul|🇰🇷|(?:^|[^a-zA-Z])(?:kr|icn|gmp|pus)(?:[^a-zA-Z]|$))|(?:美国|美东|美西|美中|美南|美港|美日|中美|美专|america|united states|🇺🇸|(?:^|[^a-zA-Z])(?:us|usa|lax|sfo|jfk|sjc)(?:[^a-zA-Z]|$))|(?:德国|英国|法国|荷兰|瑞士|瑞典|挪威|芬兰|丹麦|意大利|西班牙|波兰|奥地利|爱尔兰|葡萄牙|比利时|捷克|希腊|germany|united kingdom|france|netherlands|europe|🇩🇪|🇬🇧|🇫🇷|🇳🇱|🇨🇭|🇸🇪|🇳🇴|🇫🇮|🇩🇰|🇮🇹|🇪🇸|🇵🇱|🇦🇹|🇮🇪|🇵🇹|🇧🇪|🇨🇿|🇬🇷|(?:^|[^a-zA-Z])(?:de|ger|uk|gb|fr|nl|ch|se|no|fi|dk|it|es|pl|at|ie|pt|be|cz|gr)(?:[^a-zA-Z]|$))|(?:越南|泰国|马来西亚|菲律宾|印度尼西亚|印尼|柬埔寨|缅甸|老挝|vietnam|thailand|malaysia|philippines|indonesia|🇻🇳|🇹🇭|🇲🇾|🇵🇭|🇮🇩|🇰🇭|🇲🇲|🇱🇦|(?:^|[^a-zA-Z])(?:vn|th|my|ph|id|kh|mm|la)(?:[^a-zA-Z]|$)))"
 
 x-oversea:      &oversea      [故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, 欧洲策略, 东南亚策略, 其他地区策略, DIRECT]
 x-direct:       &direct       [DIRECT, 故障转移, 全球手动, 香港策略, 台湾策略, 日本策略, 狮城策略, 韩国策略, 美国策略, 欧洲策略, 东南亚策略, 其他地区策略]
@@ -145,7 +145,7 @@ proxy-groups:
   - { name: 美国策略, type: select, include-all: true, filter: *filter-us, proxies: [美国自动, 美国均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/United_States.png }
   - { name: 欧洲策略, type: select, include-all: true, filter: *filter-eu, proxies: [欧洲自动, 欧洲均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Global.png }
   - { name: 东南亚策略, type: select, include-all: true, filter: *filter-sea, proxies: [东南亚自动, 东南亚均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Global.png }
-  - { name: 其他地区策略, type: select, include-all: true, filter: *filter-other, proxies: [其他地区自动, 其他地区均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Global.png }
+  - { name: 其他地区策略, type: select, include-all: true, exclude-filter: *filter-other, proxies: [其他地区自动, 其他地区均衡], icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Global.png }
 
   # 自动测速
   - { name: 香港自动, <<: *url-test, filter: *filter-hk, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
@@ -156,7 +156,7 @@ proxy-groups:
   - { name: 美国自动, <<: *url-test, filter: *filter-us, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
   - { name: 欧洲自动, <<: *url-test, filter: *filter-eu, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
   - { name: 东南亚自动, <<: *url-test, filter: *filter-sea, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
-  - { name: 其他地区自动, <<: *url-test, filter: *filter-other, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
+  - { name: 其他地区自动, <<: *url-test, exclude-filter: *filter-other, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Auto.png }
 
   # 负载均衡
   - { name: 香港均衡, <<: *load-balance, filter: *filter-hk, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
@@ -167,7 +167,7 @@ proxy-groups:
   - { name: 美国均衡, <<: *load-balance, filter: *filter-us, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
   - { name: 欧洲均衡, <<: *load-balance, filter: *filter-eu, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
   - { name: 东南亚均衡, <<: *load-balance, filter: *filter-sea, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
-  - { name: 其他地区均衡, <<: *load-balance, filter: *filter-other, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
+  - { name: 其他地区均衡, <<: *load-balance, exclude-filter: *filter-other, icon: https://github.com/Koolson/Qure/raw/master/IconSet/Color/Round_Robin_1.png }
 
 # 规则路由
 rules:

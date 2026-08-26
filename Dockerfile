@@ -1,16 +1,17 @@
 FROM golang:1.23-alpine AS build
-ARG VERSION=4.10.0
+ARG VERSION=4.11.0
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY *.go ./
 COPY remote-configs.json ./
 COPY cmd ./cmd
+COPY internal ./internal
 COPY web ./web
 RUN normalized="${VERSION#v}" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${normalized}" -o /out/coralbay-rules .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/coralbay-ruleconvert ./cmd/ruleconvert
 
 FROM alpine:3.22
-ARG VERSION=4.10.0
+ARG VERSION=4.11.0
 LABEL org.opencontainers.image.title="CoralBay Rules" \
       org.opencontainers.image.source="https://github.com/sexyfeifan/Coralbay-Rules" \
       org.opencontainers.image.version="${VERSION}"
@@ -22,6 +23,7 @@ COPY assets /app/assets
 COPY sync.sh /usr/local/bin/coralbay-rules-sync
 COPY --from=build /out/coralbay-rules /usr/local/bin/coralbay-rules
 COPY --from=build /out/coralbay-ruleconvert /usr/local/bin/coralbay-ruleconvert
+COPY --from=metacubex/mihomo@sha256:baf38d282b785d7037337676714a69e3fdd1f2d9bf748dfd25fce681a624ea74 /mihomo /usr/local/bin/coralbay-probe-core
 
 RUN chmod 0755 /usr/local/bin/coralbay-rules-sync /usr/local/bin/coralbay-rules /usr/local/bin/coralbay-ruleconvert
 

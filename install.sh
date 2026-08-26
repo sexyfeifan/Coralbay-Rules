@@ -137,6 +137,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    networks: [default, converter_private]
     ports:
       - "127.0.0.1:${LOCAL_PORT}:8080"
 
@@ -144,6 +145,15 @@ services:
     image: ghcr.io/jungley8/subconverter-ng:latest
     container_name: coralbay-subconverter
     restart: unless-stopped
+    networks: [converter_private]
+    environment:
+      SUBNG_PROXY: http://coralbay:${ADMIN_ACTION_TOKEN}@app:8081
+      http_proxy: http://coralbay:${ADMIN_ACTION_TOKEN}@app:8081
+      https_proxy: http://coralbay:${ADMIN_ACTION_TOKEN}@app:8081
+      HTTP_PROXY: http://coralbay:${ADMIN_ACTION_TOKEN}@app:8081
+      HTTPS_PROXY: http://coralbay:${ADMIN_ACTION_TOKEN}@app:8081
+      NO_PROXY: ""
+      no_proxy: ""
 
   updater:
     image: nickfedor/watchtower:1.20.3
@@ -157,6 +167,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       com.centurylinklabs.watchtower.enable: "false"
+networks:
+  converter_private:
+    internal: true
 EOF
 }
 

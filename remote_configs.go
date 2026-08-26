@@ -106,12 +106,7 @@ func (s *server) fetchRemoteConfig(ctx context.Context, source remoteConfigSourc
 		return err
 	}
 	request.Header.Set("User-Agent", "CoralBay-Rules/"+version)
-	client := &http.Client{Timeout: 18 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("重定向过多")
-		}
-		return validateSubscriptionURLs(req.URL.String())
-	}}
+	client := safeHTTPClient(18 * time.Second)
 	response, err := client.Do(request)
 	if err != nil {
 		return err

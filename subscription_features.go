@@ -178,15 +178,25 @@ func (s *server) createSubscriptionLinkV2(w http.ResponseWriter, r *http.Request
 	}
 	nodes := convertedNodeCount(body.Target, content)
 	if nodes == 0 {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "转换结果没有可用节点：目标客户端不支持当前订阅中的节点协议。格式转换不能为客户端增加它本身不支持的协议。"})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "转换结果没有可解析节点：目标客户端不支持当前订阅中的节点协议。格式转换不能为客户端增加它本身不支持的协议。"})
 		return
 	}
-	canonical := params.Encode()
-	link := "https://" + s.domain + "/sub?" + canonical + "&sig=" + url.QueryEscape(s.sign(canonical))
+	link, err := s.subscriptionLink(params)
+	if err != nil {
+		writeJSON(w, 503, map[string]string{"error": "签名密钥不可用"})
+		return
+	}
+	if err = s.registerSubscription(link, body.Target); err != nil {
+		writeJSON(w, 503, map[string]string{"error": "链接登记失败（存储不可用或已达 10000 条上限），未生成可交付链接"})
+		return
+	}
 	item := subscriptionHistoryItem{CreatedAt: time.Now().UTC(), Target: body.Target, Filename: body.Filename, NodeCount: nodes, SourceCount: len(strings.Split(body.URL, "|")), URL: link, Config: body.Config, Settings: &body}
 	sum := sha256.Sum256([]byte(link + item.CreatedAt.String()))
 	item.ID = hex.EncodeToString(sum[:6])
-	s.appendSubscriptionHistory(item)
+	if err = s.appendSubscriptionHistory(item); err != nil {
+		writeJSON(w, 503, map[string]string{"error": "链接已登记但历史保存失败，请从链接管理复制；检查磁盘状态"})
+		return
+	}
 	s.audit("subscription-link", "completed", fmt.Sprintf("%s nodes=%d", body.Target, nodes))
 	writeJSON(w, http.StatusOK, map[string]any{"url": link, "node_count": nodes, "content_type": headers.Get("Content-Type"), "validated": true, "history_id": item.ID})
 }
@@ -207,7 +217,7 @@ func (s *server) readSubscriptionHistory() []subscriptionHistoryItem {
 	return items
 }
 
-func (s *server) appendSubscriptionHistory(item subscriptionHistoryItem) {
+func (s *server) appendSubscriptionHistory(item subscriptionHistoryItem) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := s.readSubscriptionHistory()
@@ -215,12 +225,15 @@ func (s *server) appendSubscriptionHistory(item subscriptionHistoryItem) {
 	if len(items) > 100 {
 		items = items[:100]
 	}
-	_ = os.MkdirAll(filepath.Dir(s.historyPath()), 0700)
+	if err := os.MkdirAll(filepath.Dir(s.historyPath()), 0700); err != nil {
+		return err
+	}
 	content, _ := json.MarshalIndent(items, "", "  ")
 	tmp := s.historyPath() + ".tmp"
-	if os.WriteFile(tmp, content, 0600) == nil {
-		_ = os.Rename(tmp, s.historyPath())
+	if err := os.WriteFile(tmp, content, 0600); err != nil {
+		return err
 	}
+	return os.Rename(tmp, s.historyPath())
 }
 
 func (s *server) subscriptionHistory(w http.ResponseWriter, _ *http.Request) {
@@ -297,7 +310,7 @@ func (s *server) validateSignedLink(raw string) (url.Values, error) {
 	p := u.Query()
 	sig := p.Get("sig")
 	p.Del("sig")
-	if !secureEqual(sig, s.sign(p.Encode())) || !allowedTargets[p.Get("target")] {
+	if !s.verifySubscriptionSignature(sig, p.Encode()) || !allowedTargets[p.Get("target")] {
 		return nil, fmt.Errorf("订阅签名无效")
 	}
 	return p, nil

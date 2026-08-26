@@ -1,4 +1,5 @@
 const $ = id => document.getElementById(id);
+let usagePage=1;
 async function json(url, opt = {}) { const response = await fetch(url, {...opt, cache:'no-store'}); const data = await response.json().catch(() => ({})); if (response.status===401){location.replace('/');throw new Error('登录已失效')} if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); return data; }
 function actionHeaders(extra = {}) { return extra; }
 const short = value => value ? value.slice(0, 10) : '—';
@@ -185,7 +186,7 @@ if ($('sync')) {
   $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
 	$('nativeSearch').oninput=renderNative; $('nativePlatform').onchange=renderNative;
 	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility(); loadSubconverterStatus();
-	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(subscriptionPayload())});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可用节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subQR').src=`/api/admin/subscription-qr?url=${encodeURIComponent(data.url)}`;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可用节点`;feedback.classList.add('ok');loadSubscriptionHistory()}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
+	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(subscriptionPayload())});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可解析节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subQR').src=`/api/admin/subscription-qr?url=${encodeURIComponent(data.url)}`;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可解析节点`;feedback.classList.add('ok');loadSubscriptionHistory()}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
 	$('copySubResult').onclick=async()=>{await navigator.clipboard.writeText($('subResultURL').textContent);$('message').textContent='订阅链接已复制'};
   $('parseSub').onclick=async()=>{try{const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('parseSubURL').value.trim()})});applyParsedSubscription(data.params||{});$('parseSubStatus').textContent=`已解析并回填 ${data.source_count} 个源订阅`;$('parseSubStatus').className='field-hint ok'}catch(error){$('parseSubStatus').textContent=`解析失败：${error.message}`;$('parseSubStatus').className='field-hint bad'}};
   $('syncSubPresets').onclick=async()=>{const button=$('syncSubPresets');try{button.disabled=true;button.textContent='正在缓存 88 条配置…';const data=await json('/api/admin/subscription-presets/sync',{method:'POST'});$('message').textContent=`远程配置同步完成：${data.cached}/${data.total} 可用，${data.failed} 条上游失败`;await loadSubscriptionPresets()}catch(error){$('message').textContent=`远程配置同步失败：${error.message}`}finally{button.disabled=false;button.textContent='立即更新本机镜像'}};
@@ -200,24 +201,32 @@ publicStatus();
 function installSubscriptionUsage(){
  const panel=document.createElement('section');panel.className='inner-card section-space';
  panel.innerHTML='<div class="config-head"><h3>链接管理与拉取统计</h3><button id="refreshLinkUsage" class="secondary">刷新统计</button></div><p class="field-hint">删除历史不影响这里的链接状态。次数仅代表下载订阅（含浏览器打开），不代表在线人数或上网次数；统计从本功能上线后开始。停用只阻止后续更新，不能撤回已下载的节点。</p><div id="linkUsageFeedback" class="field-hint"></div><div class="table-wrap"><table><thead><tr><th>链接 / 客户端</th><th>状态</th><th>成功 / 失败 / 拦截</th><th>首次 / 最近拉取</th><th>操作</th></tr></thead><tbody id="linkUsageRows"></tbody></table></div>';
+ const controls=document.createElement('div');controls.className='toolbar';controls.innerHTML='<input id="usageSearch" placeholder="搜索链接编号、协议或最近客户端"><select id="usageState"><option value="">全部状态</option><option value="disabled">已停用</option><option value="enabled">已启用</option><option value="never">尚未拉取</option><option value="recent">最近 48 小时有访问</option><option value="inactive">超过 48 小时未访问</option></select><button id="usageFilter">筛选</button><button id="usagePrev">上一页</button><button id="usageNext">下一页</button><button id="usagePrune">清理过期统计</button><span id="signingInfo" class="field-hint"></span>';panel.prepend(controls);
  $('subscriptionConverter').appendChild(panel);
+ $('usageFilter').onclick=()=>{usagePage=1;loadSubscriptionUsage()};$('usagePrev').onclick=()=>{usagePage--;loadSubscriptionUsage()};$('usageNext').onclick=()=>{usagePage++;loadSubscriptionUsage()};
  $('refreshLinkUsage').onclick=loadSubscriptionUsage;
+ json('/api/admin/subscription-keys').then(k=>{$('signingInfo').textContent='独立签名 v2 · 旧链接兼容至 '+new Date(k.legacy_until).toLocaleDateString('zh-CN')}).catch(()=>{$('signingInfo').textContent='签名状态读取失败'});
+ $('usagePrune').onclick=async()=>{if(!confirm('重置 180 天未访问的已启用链接的累计次数和客户端信息？保留链接、最后访问时间与全部停用记录。'))return;try{const d=await json('/api/admin/subscription-usage/prune',{method:'POST'});await loadSubscriptionUsage();$('linkUsageFeedback').textContent='已重置 '+d.reset+' 条过期统计'}catch(e){$('linkUsageFeedback').textContent=e.message}};
+
  loadSubscriptionUsage();
 }
 async function loadSubscriptionUsage(){
  const feedback=$('linkUsageFeedback');
  try{
- const data=await json('/api/admin/subscription-usage');
+ const query=new URLSearchParams({page:String(usagePage),page_size:'20',q:$('usageSearch').value,state:$('usageState').value});
+ const data=await json('/api/admin/subscription-usage?'+query);usagePage=data.page;$('usagePrev').disabled=data.page<=1;$('usageNext').disabled=data.page>=data.pages;
  const stamp=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—';
  $('linkUsageRows').innerHTML=(data.links||[]).map(item=>{
  const state=item.disabled?'已停用':!item.last?'尚未拉取':Date.now()-new Date(item.last).getTime()<48*3600000?'最近 48 小时有访问':'超过 48 小时未访问';
- return `<tr><td><strong>${escapeHTML(item.target)}</strong> · ${escapeHTML(item.id.slice(0,10))}<br><small>最近客户端：${escapeHTML(item.client||'—')}（请求标识，非设备身份）</small></td><td>${state}</td><td>${item.success} / ${item.failure} / ${item.blocked}</td><td>${stamp(item.first)}<br>${stamp(item.last)}</td><td><button class="link-button" data-link-copy="${escapeHTML(item.url)}">复制链接</button> <button class="link-button" data-link-state="${escapeHTML(item.id)}" data-disabled="${!item.disabled}">${item.disabled?'恢复':'停用'}</button></td></tr>`;
+ return `<tr><td><strong>${escapeHTML(item.target)}</strong> · ${escapeHTML(item.id.slice(0,10))}<br><small>最近客户端：${escapeHTML(item.client||'—')}（请求标识，非设备身份）</small></td><td>${state}</td><td>${item.success} / ${item.failure} / ${item.blocked}</td><td>${stamp(item.first)}<br>${stamp(item.last)}</td><td><button class="link-button" data-link-copy="${escapeHTML(item.url)}">复制链接</button> <button class="link-button" data-link-renew="${escapeHTML(item.id)}">更新签名</button> <button class="link-button" data-link-probe="${escapeHTML(item.url)}">连通性抽测</button> <button class="link-button" data-link-state="${escapeHTML(item.id)}" data-disabled="${!item.disabled}">${item.disabled?'恢复':'停用'}</button></td></tr>`;
  }).join('')||'<tr><td colspan="5">暂无链接；旧链接下次拉取时将自动登记。</td></tr>';
  document.querySelectorAll('[data-link-copy]').forEach(b=>b.onclick=async()=>{await navigator.clipboard.writeText(b.dataset.linkCopy);feedback.textContent='链接已复制'});
+ document.querySelectorAll('[data-link-renew]').forEach(b=>b.onclick=async()=>{try{b.disabled=true;const d=await json('/api/admin/subscription-usage/'+encodeURIComponent(b.dataset.linkRenew)+'/renew',{method:'POST'});await loadSubscriptionUsage();feedback.textContent='已更新为 v2 签名，请点“复制链接”替换客户端订阅；停用状态保持不变。'}catch(e){feedback.textContent=e.message;b.disabled=false}});
+ document.querySelectorAll('[data-link-probe]').forEach(b=>b.onclick=async()=>{if(!confirm('由服务器通过 Mihomo 内核抽测前 3 个节点至 Google HTTPS 204，会产生少量节点流量。只支持 Stash/Clash；结果不是手机端连通性保证。继续？'))return;try{b.disabled=true;feedback.textContent='连通性抽测中，通常需要 10–90 秒…';const d=await json('/api/admin/subscription-probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:b.dataset.linkProbe})});feedback.textContent=d.scope+'\n'+d.results.map(x=>x.name+'：'+(x.ok?x.delay_ms+' ms':x.error)).join('；')}catch(e){feedback.textContent=e.message}finally{b.disabled=false}});
  document.querySelectorAll('[data-link-state]').forEach(b=>b.onclick=async()=>{
  const disabled=b.dataset.disabled==='true';if(!confirm(disabled?'停用此链接？后续订阅更新将被拒绝，已下载配置仍可使用。同一参数生成的相同链接同时生效。':'恢复此链接的订阅更新？'))return;
  try{b.disabled=true;await json('/api/admin/subscription-usage/'+encodeURIComponent(b.dataset.linkState),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled})});await loadSubscriptionUsage()}catch(e){feedback.textContent=e.message;b.disabled=false}
  });
- feedback.textContent=`${data.count} 条链接 · 统计于 ${new Date().toLocaleTimeString('zh-CN')} 更新（非在线监测）`;
+ feedback.textContent=`${data.count} 条链接 · 第 ${data.page}/${data.pages} 页 · 统计于 ${new Date().toLocaleTimeString('zh-CN')} 更新（非在线监测）`;
  }catch(e){feedback.textContent='读取统计失败：'+e.message}
 }

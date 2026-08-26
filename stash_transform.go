@@ -12,9 +12,11 @@ import (
 )
 
 func restoreStashVLESSFields(ctx context.Context, sources string, content []byte) []byte {
+	return restoreStashVLESSWithClient(ctx, sources, content, safeHTTPClient(20*time.Second))
+}
+func restoreStashVLESSWithClient(ctx context.Context, sources string, content []byte, client *http.Client) []byte {
 	type fields struct{ spiderX, encryption string }
 	original := map[string]fields{}
-	client := &http.Client{Timeout: 20 * time.Second}
 	for _, source := range strings.Split(sources, "|") {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(source), nil)
 		if err != nil {
@@ -32,7 +34,7 @@ func restoreStashVLESSFields(ctx context.Context, sources string, content []byte
 		}
 		for _, token := range strings.Fields(string(body)) {
 			u, err := url.Parse(token)
-			if err != nil || !strings.EqualFold(u.Scheme, "vless") {
+			if err != nil || !strings.EqualFold(u.Scheme, "vless") || u.User == nil {
 				continue
 			}
 			values := fields{spiderX: u.Query().Get("spx"), encryption: u.Query().Get("encryption")}

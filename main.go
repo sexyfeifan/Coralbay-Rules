@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"database/sql"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -27,7 +28,7 @@ import (
 	"time"
 )
 
-var version = "4.10.0"
+var version = "4.11.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -36,6 +37,8 @@ var webFS embed.FS
 var remoteConfigCatalog []byte
 
 type server struct {
+	usageDB         *sql.DB
+	probeMu         sync.Mutex
 	dataDir         string
 	domain          string
 	updaterURL      string
@@ -45,6 +48,7 @@ type server struct {
 	subconverterURL string
 	interval        time.Duration
 	scheduleReset   chan time.Duration
+	nextSync        time.Time
 	mu              sync.RWMutex
 	syncing         bool
 	lastError       string
@@ -142,6 +146,13 @@ func main() {
 		scheduleReset:   make(chan time.Duration, 1),
 		actionTimes:     make(map[string]time.Time),
 	}
+	if _, err := s.loadSubscriptionKeys(); err != nil {
+		log.Fatal("subscription signing keys unavailable: ", err)
+	}
+	go func() {
+		srv := &http.Server{Addr: ":8081", Handler: http.HandlerFunc(s.egressProxy), ReadHeaderTimeout: 10 * time.Second}
+		log.Fatal(srv.ListenAndServe())
+	}()
 	if content, err := os.ReadFile(filepath.Join(dataDir, "activity.log")); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 		if len(lines) > 300 {
@@ -178,6 +189,10 @@ func main() {
 	mux.HandleFunc("GET /api/admin/subscription-capabilities", s.auth(s.subscriptionCapabilities))
 	mux.HandleFunc("GET /api/admin/subscription-history", s.auth(s.subscriptionHistory))
 	mux.HandleFunc("GET /api/admin/subscription-usage", s.auth(s.subscriptionUsageCatalog))
+	mux.HandleFunc("POST /api/admin/subscription-probe", s.auth(s.probeSubscription))
+	mux.HandleFunc("POST /api/admin/subscription-usage/{id}/renew", s.auth(s.renewSubscriptionLink))
+	mux.HandleFunc("POST /api/admin/subscription-usage/prune", s.auth(s.pruneSubscriptionStats))
+	mux.HandleFunc("GET /api/admin/subscription-keys", s.auth(s.subscriptionKeyStatus))
 	mux.HandleFunc("PUT /api/admin/subscription-usage/{id}", s.auth(s.setSubscriptionDisabled))
 	mux.HandleFunc("DELETE /api/admin/subscription-history", s.auth(s.clearSubscriptionHistory))
 	mux.HandleFunc("DELETE /api/admin/subscription-history/{id}", s.auth(s.deleteSubscriptionHistory))
@@ -365,7 +380,7 @@ func validateSubscriptionURLs(raw string) error {
 	}
 	for _, value := range parts {
 		u, err := url.Parse(strings.TrimSpace(value))
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
 			return fmt.Errorf("仅支持 HTTP/HTTPS 订阅地址")
 		}
 		ips, err := net.LookupIP(u.Hostname())
@@ -373,7 +388,7 @@ func validateSubscriptionURLs(raw string) error {
 			return fmt.Errorf("订阅域名无法解析")
 		}
 		for _, ip := range ips {
-			if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			if !publicIP(ip) {
 				return fmt.Errorf("不允许访问内网订阅地址")
 			}
 		}
@@ -443,11 +458,14 @@ func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) 
 	}
 	nodes := convertedNodeCount(body.Target, content)
 	if nodes == 0 {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "转换结果没有可用节点：目标客户端不支持当前订阅中的节点协议。VLESS Reality 不能输出到 Surge，请改用 Clash/Mihomo、sing-box、Shadowrocket、Quantumult X、Loon 或 V2Ray。"})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "转换结果没有可解析节点：目标客户端不支持当前订阅中的节点协议。VLESS Reality 不能输出到 Surge，请改用 Clash/Mihomo、sing-box、Shadowrocket、Quantumult X、Loon 或 V2Ray。"})
 		return
 	}
-	canonical := params.Encode()
-	link := "https://" + s.domain + "/sub?" + canonical + "&sig=" + url.QueryEscape(s.sign(canonical))
+	link, err := s.subscriptionLink(params)
+	if err != nil {
+		writeJSON(w, 503, map[string]string{"error": "签名密钥不可用"})
+		return
+	}
 	s.audit("subscription-link", "completed", fmt.Sprintf("%s nodes=%d", body.Target, nodes))
 	writeJSON(w, http.StatusOK, map[string]any{"url": link, "node_count": nodes, "content_type": headers.Get("Content-Type"), "validated": true})
 }
@@ -484,8 +502,15 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 		return nil, nil, fmt.Errorf("转换后端返回错误：%s", detail)
 	}
 	if params.Get("target") == "stash" {
-		content = transformStashSubscription(content, "https://"+s.domain+"/_assets/icons/")
+		if s.isBuiltInStash(params) {
+			content = transformStashSubscription(content, "https://"+s.domain+"/_assets/icons/")
+		}
 		content = restoreStashVLESSFields(ctx, params.Get("url"), content)
+	}
+	if target := params.Get("target"); target == "stash" || target == "clash" || target == "clashr" {
+		if err := validateYAMLReferences(content); err != nil {
+			return nil, nil, err
+		}
 	}
 	return content, resp.Header.Clone(), nil
 }
@@ -583,7 +608,7 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 	signature := params.Get("sig")
 	params.Del("sig")
 	target, source := params.Get("target"), params.Get("url")
-	if !allowedTargets[target] || !secureEqual(signature, s.sign(params.Encode())) || validateSubscriptionURLs(source) != nil {
+	if !allowedTargets[target] || !s.verifySubscriptionSignature(signature, params.Encode()) || validateSubscriptionURLs(source) != nil {
 		http.Error(w, "invalid subscription link", http.StatusForbidden)
 		return
 	}
@@ -768,7 +793,7 @@ func (s *server) adminStatus(w http.ResponseWriter, _ *http.Request) {
 		"status": status, "latest_version": release.Version, "update_available": newerVersion(release.Version, "v"+version),
 		"release_url": release.URL, "certificate": cert, "icons": icons,
 		"template_url": "https://" + s.domain + "/_templates/ppanel_openclash_pro_cn.gotmpl",
-		"job":          s.job, "next_sync_at": time.Now().Add(s.interval),
+		"job":          s.job, "next_sync_at": s.nextSync,
 		"security": map[string]any{"password_login": true, "session_hours": 12, "public_console": false},
 	}
 	s.mu.RUnlock()
@@ -938,7 +963,7 @@ func (s *server) scheduler() {
 	if _, err := s.readStatus(); err != nil {
 		s.startSync()
 	}
-	timer := time.NewTimer(s.interval)
+	timer := time.NewTimer(s.scheduleDeadline(true, s.interval))
 	defer timer.Stop()
 	for {
 		select {
@@ -947,7 +972,7 @@ func (s *server) scheduler() {
 			s.mu.RLock()
 			interval := s.interval
 			s.mu.RUnlock()
-			timer.Reset(interval)
+			timer.Reset(s.scheduleDeadline(false, interval))
 		case interval := <-s.scheduleReset:
 			if !timer.Stop() {
 				select {
@@ -955,7 +980,7 @@ func (s *server) scheduler() {
 				default:
 				}
 			}
-			timer.Reset(interval)
+			timer.Reset(s.scheduleDeadline(false, interval))
 		}
 	}
 }

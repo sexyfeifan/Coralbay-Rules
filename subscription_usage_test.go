@@ -3,6 +3,7 @@ package main
 import (
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,7 +69,9 @@ func TestUsageConcurrentCounters(t *testing.T) {
 }
 func TestUsageCorruptionFailsClosed(t *testing.T) {
 	s := &server{dataDir: t.TempDir()}
-	_, _, _ = s.startSubscriptionAccess("https://example.com/sub?target=stash", "")
+	if err := os.MkdirAll(filepath.Dir(s.usagePath()), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(s.usagePath(), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ func TestRestoreStashVLESSFields(t *testing.T) {
 	}))
 	defer source.Close()
 	input := []byte("proxies:\n    - name: node\n      type: vless\n      uuid: test-uuid\n      reality-opts:\n        public-key: key\n        short-id: id\nproxy-groups:\n")
-	got := string(restoreStashVLESSFields(context.Background(), source.URL, input))
+	got := string(restoreStashVLESSWithClient(context.Background(), source.URL, input, source.Client()))
 	if !strings.Contains(got, `spider-x: "/path"`) {
 		t.Fatalf("spider-x was not preserved:\n%s", got)
 	}
