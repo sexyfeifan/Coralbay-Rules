@@ -30,6 +30,18 @@
 
 ## 部署、备份与边界
 
+### 本次生产验收（2026-08-26）
+
+- 生产服务已运行 4.11.0，容器健康；规则同步产物 generator_version=4.11.0，33 个规则文件校验通过。
+- 原有签名订阅返回 HTTP 200，包含节点和规则集；新签名链接解析出 6 个节点。
+- 生产服务器抽测前 3 个节点均完成 HTTPS 204 请求，本轮延迟分别为 344 / 236 / 348 ms（瞬时样本，不代表持续质量或手机端性能）。
+- 旧签名兼容截止时间：2026-11-24 18:41（北京时间）；管理页可更新签名。
+- 连续读取显示同一个 next_sync_at，未出现查询导致的时间漂移。
+- converter_private 网络 internal=true；移除代理环境变量后直接出站失败；通过受控代理访问元数据地址失败。
+- 生产备份：/opt/coralbay-rules/backups/pre-4.11.0-20260826/state.tar.gz。rules / 666 管理脚本均已升级。
+- Docker Hub 的 4.11.0 / latest 已发布 amd64 + arm64，索引摘要 cbfbb5064d6b8e46d115f50212e2c385e3121d62d5a459e05652744267f29608。
+- GitHub CI 全部通过（运行 32958763677）。独立 Docker 自动发布任务因仓库未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN 失败；本次已从本机完成镜像发布，不应将自动任务标为成功。未来要启用 GitHub 自动发布，需另行配置专用凭据。
+
 使用最新 install.sh 的“升级”操作会更新 Compose。保留 /data/settings（密钥和 SQLite/WAL）、/data/schedule.json、安装目录 .env 和 compose.yaml。在线复制单个 SQLite 文件不可靠，备份时停应用或使用 SQLite 备份接口。
 
 旧 JSON 仅是升级前备份，不是新数据库镜像。不要直接降级到 v4.10 并沿用旧 JSON，否则升级后新增的停用记录可能丢失。回退应停止应用并恢复对应版本的完整备份。
