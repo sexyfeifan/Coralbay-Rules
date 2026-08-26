@@ -11,22 +11,24 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type subscriptionUsage struct {
-	ID       string     `json:"id"`
-	URL      string     `json:"url"`
-	Target   string     `json:"target"`
-	Disabled bool       `json:"disabled"`
-	Success  uint64     `json:"success"`
-	Failure  uint64     `json:"failure"`
-	Blocked  uint64     `json:"blocked"`
-	First    *time.Time `json:"first,omitempty"`
-	Last     *time.Time `json:"last,omitempty"`
-	Client   string     `json:"client"`
+	ID       string                    `json:"id"`
+	URL      string                    `json:"url"`
+	Target   string                    `json:"target"`
+	Disabled bool                      `json:"disabled"`
+	Success  uint64                    `json:"success"`
+	Failure  uint64                    `json:"failure"`
+	Blocked  uint64                    `json:"blocked"`
+	First    *time.Time                `json:"first,omitempty"`
+	Last     *time.Time                `json:"last,omitempty"`
+	Client   string                    `json:"client"`
+	History  []subscriptionHistoryItem `json:"history,omitempty"`
 }
 
 func usageID(raw string) string {
@@ -263,12 +265,24 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 	s.mu.Lock()
 	e := s.preserveHistoryUsage()
 	db := s.usageDB
+	history := s.readSubscriptionHistory()
 	s.mu.Unlock()
 	if e != nil {
 		writeJSON(w, 503, map[string]string{"error": "链接数据库不可用"})
 		return
 	}
 	q := r.URL.Query()
+	histories := map[string][]subscriptionHistoryItem{}
+	for _, h := range history {
+		id := usageID(h.URL)
+		histories[id] = append(histories[id], h)
+	}
+	ids := make([]string, 0, len(histories))
+	for id := range histories {
+		ids = append(ids, id)
+		sort.SliceStable(histories[id], func(i, j int) bool { return histories[id][i].CreatedAt.After(histories[id][j].CreatedAt) })
+	}
+	sort.Strings(ids)
 	page := boundedInt(q.Get("page"), 1, 1000000)
 	size := boundedInt(q.Get("page_size"), 20, 100)
 	where := " WHERE 1=1"
@@ -278,8 +292,18 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 		search = search[:120]
 	}
 	if search != "" {
-		where += " AND (instr(id,?)>0 OR instr(target,?)>0 OR instr(client,?)>0)"
+		where += " AND (instr(id,?)>0 OR instr(target,?)>0 OR instr(client,?)>0"
 		args = append(args, search, search, search)
+		for _, id := range ids {
+			for _, h := range histories[id] {
+				if strings.Contains(strings.ToLower(h.Filename), strings.ToLower(search)) {
+					where += " OR id=?"
+					args = append(args, id)
+					break
+				}
+			}
+		}
+		where += ")"
 	}
 	cutoff := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339Nano)
 	switch q.Get("state") {
@@ -295,6 +319,21 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 	case "inactive":
 		where += " AND last<?"
 		args = append(args, cutoff)
+	case "with_history", "without_history":
+		if len(ids) == 0 {
+			if q.Get("state") == "with_history" {
+				where += " AND 0=1"
+			}
+		} else {
+			where += " AND id "
+			if q.Get("state") == "without_history" {
+				where += "NOT "
+			}
+			where += "IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")"
+			for _, id := range ids {
+				args = append(args, id)
+			}
+		}
 	}
 	var count int
 	if e = db.QueryRow("SELECT count(*) FROM links"+where, args...).Scan(&count); e != nil {
@@ -308,7 +347,17 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 	if page > pages {
 		page = pages
 	}
-	rows, e := db.Query("SELECT id,url,target,disabled,success,failure,blocked,first,last,client FROM links"+where+" ORDER BY last DESC,id LIMIT ? OFFSET ?", append(args, size, (page-1)*size)...)
+	order := "last DESC,id"
+	if q.Get("sort") != "access" && len(ids) > 0 {
+		generation := "CASE id"
+		for _, id := range ids {
+			generation += " WHEN ? THEN ?"
+			args = append(args, id, histories[id][0].CreatedAt.UTC().Format(time.RFC3339Nano))
+		}
+		generation += " ELSE '' END"
+		order = "max(COALESCE(last,'')," + generation + ") DESC,id"
+	}
+	rows, e := db.Query("SELECT id,url,target,disabled,success,failure,blocked,first,last,client FROM links"+where+" ORDER BY "+order+" LIMIT ? OFFSET ?", append(args, size, (page-1)*size)...)
 	if e != nil {
 		writeJSON(w, 503, map[string]string{"error": "查询失败"})
 		return
@@ -321,6 +370,7 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 			writeJSON(w, 503, map[string]string{"error": "数据损坏"})
 			return
 		}
+		v.History = histories[v.ID]
 		list = append(list, v)
 	}
 	if rows.Err() != nil {

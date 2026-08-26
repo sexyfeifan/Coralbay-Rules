@@ -128,7 +128,12 @@ func TestTemplateVariantsAndHistoryControlsArePresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, marker := range []string{`id="templateVariant"`, `Perfect Panel 原始版`, `设置项目`, `复用或单独删除`} {
+	js, err := os.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text += string(js)
+	for _, marker := range []string{`id="templateVariant"`, `Perfect Panel 原始版`, `生成设置与记录`, `data-history-reuse`, `data-history-delete`} {
 		if !strings.Contains(text, marker) {
 			t.Errorf("missing UI marker %q", marker)
 		}
