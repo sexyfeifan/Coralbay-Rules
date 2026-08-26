@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-var version = "4.9.4"
+var version = "4.10.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -177,6 +177,8 @@ func main() {
 	mux.HandleFunc("POST /api/admin/subscription-presets/sync", s.auth(s.syncSubscriptionPresets))
 	mux.HandleFunc("GET /api/admin/subscription-capabilities", s.auth(s.subscriptionCapabilities))
 	mux.HandleFunc("GET /api/admin/subscription-history", s.auth(s.subscriptionHistory))
+	mux.HandleFunc("GET /api/admin/subscription-usage", s.auth(s.subscriptionUsageCatalog))
+	mux.HandleFunc("PUT /api/admin/subscription-usage/{id}", s.auth(s.setSubscriptionDisabled))
 	mux.HandleFunc("DELETE /api/admin/subscription-history", s.auth(s.clearSubscriptionHistory))
 	mux.HandleFunc("DELETE /api/admin/subscription-history/{id}", s.auth(s.deleteSubscriptionHistory))
 	mux.HandleFunc("POST /api/admin/subscription-parse", s.auth(s.parseSubscriptionLink))
@@ -585,6 +587,21 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid subscription link", http.StatusForbidden)
 		return
 	}
+	usageKey, disabled, usageErr := s.startSubscriptionAccess("https://"+s.domain+r.URL.RequestURI(), r.UserAgent())
+	if usageErr != nil {
+		http.Error(w, "subscription state unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if disabled {
+		http.Error(w, "subscription link disabled", http.StatusGone)
+		return
+	}
+	success := false
+	defer func() {
+		if err := s.finishSubscriptionAccess(usageKey, success); err != nil {
+			s.audit("subscription-usage", "write-failed", usageKey)
+		}
+	}()
 	content, headers, err := s.convertSubscription(r.Context(), params)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -612,7 +629,8 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="CoralBay_Subscription_`+target+`.`+extension+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(content)
+	_, writeErr := w.Write(content)
+	success = writeErr == nil
 }
 
 func (s *server) publicDiagnostics(w http.ResponseWriter, _ *http.Request) {

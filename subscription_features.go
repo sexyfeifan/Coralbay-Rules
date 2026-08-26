@@ -230,6 +230,11 @@ func (s *server) subscriptionHistory(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) clearSubscriptionHistory(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
+	if err := s.preserveHistoryUsage(); err != nil {
+		s.mu.Unlock()
+		writeJSON(w, 503, map[string]string{"error": "无法保存链接管理信息，未清除历史"})
+		return
+	}
 	err := os.Remove(s.historyPath())
 	s.mu.Unlock()
 	if err != nil && !os.IsNotExist(err) {
@@ -247,6 +252,11 @@ func (s *server) deleteSubscriptionHistory(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.mu.Lock()
+	if err := s.preserveHistoryUsage(); err != nil {
+		s.mu.Unlock()
+		writeJSON(w, 503, map[string]string{"error": "无法保存链接管理信息，未删除历史"})
+		return
+	}
 	items := s.readSubscriptionHistory()
 	kept := make([]subscriptionHistoryItem, 0, len(items))
 	found := false
@@ -258,11 +268,16 @@ func (s *server) deleteSubscriptionHistory(w http.ResponseWriter, r *http.Reques
 		kept = append(kept, item)
 	}
 	if found {
-		_ = os.MkdirAll(filepath.Dir(s.historyPath()), 0700)
 		content, _ := json.MarshalIndent(kept, "", "  ")
 		tmp := s.historyPath() + ".tmp"
-		if err := os.WriteFile(tmp, content, 0600); err == nil {
-			_ = os.Rename(tmp, s.historyPath())
+		err := os.WriteFile(tmp, content, 0600)
+		if err == nil {
+			err = os.Rename(tmp, s.historyPath())
+		}
+		if err != nil {
+			s.mu.Unlock()
+			writeJSON(w, 500, map[string]string{"error": "历史记录保存失败，删除未完成"})
+			return
 		}
 	}
 	s.mu.Unlock()

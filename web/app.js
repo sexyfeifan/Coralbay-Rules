@@ -192,6 +192,32 @@ if ($('sync')) {
   $('clearSubHistory').onclick=async()=>{if(!confirm('确认清空订阅转换历史？已生成的签名链接仍可使用。'))return;await json('/api/admin/subscription-history',{method:'DELETE'});loadSubscriptionHistory()};
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{clearTimeout(detailTimer);detailTimer=setTimeout(()=>showRuleDetails(detailPath,detailName,$('detailSearch').value),250)};
   async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus(),loadSubscriptionPresets(),loadSubscriptionCapabilities(),loadSubscriptionHistory()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
+  installSubscriptionUsage();
   refreshAll();
 }
 publicStatus();
+
+function installSubscriptionUsage(){
+ const panel=document.createElement('section');panel.className='inner-card section-space';
+ panel.innerHTML='<div class="config-head"><h3>链接管理与拉取统计</h3><button id="refreshLinkUsage" class="secondary">刷新统计</button></div><p class="field-hint">删除历史不影响这里的链接状态。次数仅代表下载订阅（含浏览器打开），不代表在线人数或上网次数；统计从本功能上线后开始。停用只阻止后续更新，不能撤回已下载的节点。</p><div id="linkUsageFeedback" class="field-hint"></div><div class="table-wrap"><table><thead><tr><th>链接 / 客户端</th><th>状态</th><th>成功 / 失败 / 拦截</th><th>首次 / 最近拉取</th><th>操作</th></tr></thead><tbody id="linkUsageRows"></tbody></table></div>';
+ $('subscriptionConverter').appendChild(panel);
+ $('refreshLinkUsage').onclick=loadSubscriptionUsage;
+ loadSubscriptionUsage();
+}
+async function loadSubscriptionUsage(){
+ const feedback=$('linkUsageFeedback');
+ try{
+ const data=await json('/api/admin/subscription-usage');
+ const stamp=v=>v?new Date(v).toLocaleString('zh-CN',{hour12:false}):'—';
+ $('linkUsageRows').innerHTML=(data.links||[]).map(item=>{
+ const state=item.disabled?'已停用':!item.last?'尚未拉取':Date.now()-new Date(item.last).getTime()<48*3600000?'最近 48 小时有访问':'超过 48 小时未访问';
+ return `<tr><td><strong>${escapeHTML(item.target)}</strong> · ${escapeHTML(item.id.slice(0,10))}<br><small>最近客户端：${escapeHTML(item.client||'—')}（请求标识，非设备身份）</small></td><td>${state}</td><td>${item.success} / ${item.failure} / ${item.blocked}</td><td>${stamp(item.first)}<br>${stamp(item.last)}</td><td><button class="link-button" data-link-copy="${escapeHTML(item.url)}">复制链接</button> <button class="link-button" data-link-state="${escapeHTML(item.id)}" data-disabled="${!item.disabled}">${item.disabled?'恢复':'停用'}</button></td></tr>`;
+ }).join('')||'<tr><td colspan="5">暂无链接；旧链接下次拉取时将自动登记。</td></tr>';
+ document.querySelectorAll('[data-link-copy]').forEach(b=>b.onclick=async()=>{await navigator.clipboard.writeText(b.dataset.linkCopy);feedback.textContent='链接已复制'});
+ document.querySelectorAll('[data-link-state]').forEach(b=>b.onclick=async()=>{
+ const disabled=b.dataset.disabled==='true';if(!confirm(disabled?'停用此链接？后续订阅更新将被拒绝，已下载配置仍可使用。同一参数生成的相同链接同时生效。':'恢复此链接的订阅更新？'))return;
+ try{b.disabled=true;await json('/api/admin/subscription-usage/'+encodeURIComponent(b.dataset.linkState),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled})});await loadSubscriptionUsage()}catch(e){feedback.textContent=e.message;b.disabled=false}
+ });
+ feedback.textContent=`${data.count} 条链接 · 统计于 ${new Date().toLocaleTimeString('zh-CN')} 更新（非在线监测）`;
+ }catch(e){feedback.textContent='读取统计失败：'+e.message}
+}
