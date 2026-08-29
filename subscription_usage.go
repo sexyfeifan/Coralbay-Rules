@@ -22,6 +22,7 @@ type subscriptionUsage struct {
 	URL      string                    `json:"url"`
 	Target   string                    `json:"target"`
 	Disabled bool                      `json:"disabled"`
+	Archived bool                      `json:"archived"`
 	Success  uint64                    `json:"success"`
 	Failure  uint64                    `json:"failure"`
 	Blocked  uint64                    `json:"blocked"`
@@ -51,7 +52,7 @@ func usageTime(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 func insertUsage(tx *sql.Tx, v *subscriptionUsage) error {
-	_, e := tx.Exec("INSERT OR IGNORE INTO links(id,url,target,disabled,success,failure,blocked,first,last,client) VALUES(?,?,?,?,?,?,?,?,?,?)", v.ID, v.URL, v.Target, v.Disabled, v.Success, v.Failure, v.Blocked, usageTime(v.First), usageTime(v.Last), v.Client)
+	_, e := tx.Exec("INSERT OR IGNORE INTO links(id,url,target,disabled,archived,success,failure,blocked,first,last,client) VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.URL, v.Target, v.Disabled, v.Archived, v.Success, v.Failure, v.Blocked, usageTime(v.First), usageTime(v.Last), v.Client)
 	return e
 }
 
@@ -82,13 +83,22 @@ func (s *server) openUsageDB() (*sql.DB, error) {
 		}
 	}()
 	_, e = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
- CREATE TABLE IF NOT EXISTS links(id TEXT PRIMARY KEY,url TEXT NOT NULL,target TEXT NOT NULL,disabled INTEGER NOT NULL DEFAULT 0,success INTEGER NOT NULL DEFAULT 0,failure INTEGER NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0,first TEXT,last TEXT,client TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS links(id TEXT PRIMARY KEY,url TEXT NOT NULL,target TEXT NOT NULL,disabled INTEGER NOT NULL DEFAULT 0,archived INTEGER NOT NULL DEFAULT 0,success INTEGER NOT NULL DEFAULT 0,failure INTEGER NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0,first TEXT,last TEXT,client TEXT NOT NULL DEFAULT '');
  CREATE INDEX IF NOT EXISTS links_last ON links(last DESC,id);
  CREATE INDEX IF NOT EXISTS links_state ON links(disabled,last DESC);
  CREATE TRIGGER IF NOT EXISTS link_capacity BEFORE INSERT ON links WHEN NOT EXISTS(SELECT 1 FROM links WHERE id=NEW.id) AND (SELECT count(*) FROM links)>=10000 BEGIN SELECT RAISE(ABORT,'link registry capacity reached'); END;
  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);`)
 	if e != nil {
 		return nil, e
+	}
+	var archivedColumn int
+	if e = db.QueryRow("SELECT count(*) FROM pragma_table_info('links') WHERE name='archived'").Scan(&archivedColumn); e != nil {
+		return nil, e
+	}
+	if archivedColumn == 0 {
+		if _, e = db.Exec("ALTER TABLE links ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"); e != nil {
+			return nil, e
+		}
 	}
 	var done string
 	e = db.QueryRow("SELECT value FROM metadata WHERE key='json-migrated'").Scan(&done)
@@ -133,7 +143,7 @@ func (s *server) openUsageDB() (*sql.DB, error) {
 func scanUsage(rows *sql.Rows) (*subscriptionUsage, error) {
 	v := &subscriptionUsage{}
 	var first, last sql.NullString
-	e := rows.Scan(&v.ID, &v.URL, &v.Target, &v.Disabled, &v.Success, &v.Failure, &v.Blocked, &first, &last, &v.Client)
+	e := rows.Scan(&v.ID, &v.URL, &v.Target, &v.Disabled, &v.Archived, &v.Success, &v.Failure, &v.Blocked, &first, &last, &v.Client)
 	if e != nil {
 		return nil, e
 	}
@@ -158,7 +168,7 @@ func (s *server) readUsage() (map[string]*subscriptionUsage, error) {
 	if e != nil {
 		return nil, e
 	}
-	rows, e := db.Query("SELECT id,url,target,disabled,success,failure,blocked,first,last,client FROM links")
+	rows, e := db.Query("SELECT id,url,target,disabled,archived,success,failure,blocked,first,last,client FROM links")
 	if e != nil {
 		return nil, e
 	}
@@ -285,7 +295,10 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 	sort.Strings(ids)
 	page := boundedInt(q.Get("page"), 1, 1000000)
 	size := boundedInt(q.Get("page_size"), 20, 100)
-	where := " WHERE 1=1"
+	where := " WHERE archived=0"
+	if q.Get("state") == "archived" {
+		where = " WHERE archived=1"
+	}
 	args := []any{}
 	search := strings.TrimSpace(q.Get("q"))
 	if len(search) > 120 {
@@ -357,7 +370,7 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 		generation += " ELSE '' END"
 		order = "max(COALESCE(last,'')," + generation + ") DESC,id"
 	}
-	rows, e := db.Query("SELECT id,url,target,disabled,success,failure,blocked,first,last,client FROM links"+where+" ORDER BY "+order+" LIMIT ? OFFSET ?", append(args, size, (page-1)*size)...)
+	rows, e := db.Query("SELECT id,url,target,disabled,archived,success,failure,blocked,first,last,client FROM links"+where+" ORDER BY "+order+" LIMIT ? OFFSET ?", append(args, size, (page-1)*size)...)
 	if e != nil {
 		writeJSON(w, 503, map[string]string{"error": "查询失败"})
 		return
@@ -382,9 +395,10 @@ func (s *server) subscriptionUsageCatalog(w http.ResponseWriter, r *http.Request
 func (s *server) setSubscriptionDisabled(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Disabled *bool `json:"disabled"`
+		Archived *bool `json:"archived"`
 	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || body.Disabled == nil {
-		writeJSON(w, 400, map[string]string{"error": "需要 disabled 布尔值"})
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || body.Disabled == nil && body.Archived == nil {
+		writeJSON(w, 400, map[string]string{"error": "需要 disabled 或 archived 布尔值"})
 		return
 	}
 	s.mu.Lock()
@@ -394,7 +408,29 @@ func (s *server) setSubscriptionDisabled(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 503, map[string]string{"error": "数据库不可用"})
 		return
 	}
-	res, e := db.Exec("UPDATE links SET disabled=? WHERE id=?", *body.Disabled, r.PathValue("id"))
+	query := "UPDATE links SET "
+	args := []any{}
+	changes := []string{}
+	if body.Disabled != nil {
+		query += "disabled=?"
+		args = append(args, *body.Disabled)
+		changes = append(changes, fmt.Sprintf("disabled=%t", *body.Disabled))
+	}
+	if body.Archived != nil {
+		if len(args) > 0 {
+			query += ","
+		}
+		query += "archived=?"
+		args = append(args, *body.Archived)
+		changes = append(changes, fmt.Sprintf("archived=%t", *body.Archived))
+		if *body.Archived {
+			query += ",disabled=1"
+		} else {
+			query += ",disabled=0"
+		}
+	}
+	args = append(args, r.PathValue("id"))
+	res, e := db.Exec(query+" WHERE id=?", args...)
 	if e != nil {
 		writeJSON(w, 503, map[string]string{"error": "保存失败"})
 		return
@@ -404,6 +440,6 @@ func (s *server) setSubscriptionDisabled(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 404, map[string]string{"error": "链接不存在"})
 		return
 	}
-	s.audit("subscription-link-state", fmt.Sprintf("disabled=%t", *body.Disabled), r.PathValue("id"))
+	s.audit("subscription-link-state", strings.Join(changes, " "), r.PathValue("id"))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
