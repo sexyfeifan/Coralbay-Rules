@@ -194,6 +194,10 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 
 ## 可靠性
 
+### v4.11.4 Stash TLS 修复
+
+修复 Stash 模板的 VLESS 分支漏掉 `tls: true`：TLS 和 Reality 节点会显式启用 TLS，普通 VLESS 保持原样。原始模板和 CoralBay 适配版都会在同步后更新。详见 [v4.11.4 实施报告](REVIEW-4.11.4.md)。
+
 ### v4.11.3 修复
 
 - 同步和回滚共用内核文件锁；进程异常退出后自动释放，旧 `.sync.lock` 目录不再阻塞更新。
