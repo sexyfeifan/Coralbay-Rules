@@ -13,6 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Verify release
+        run: |
+          go test -race ./...
+          go vet ./...
+          bash -n install.sh
+          sh -n sync.sh
+          bash tests/install_test.sh
+          bash tests/sync_test.sh
+          node --check web/app.js
+          node --check web/login.js
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          version=$(awk -F= '/^ARG VERSION=/{print $2; exit}' Dockerfile)
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo 'Tag must match Dockerfile version'; exit 1; }
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -25,6 +47,7 @@ jobs:
           images: sexyfeifan/coralbay-rules
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
             type=ref,event=tag
             type=sha
       - uses: docker/build-push-action@v6
@@ -34,6 +57,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=${{ steps.version.outputs.value }}
           provenance: mode=max
           sbom: true

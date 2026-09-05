@@ -25,7 +25,9 @@ jobs:
         run: go vet ./...
       - name: Shell syntax
         run: bash -n install.sh && sh -n sync.sh
+      - name: Installer regression tests
+        run: bash tests/install_test.sh && bash tests/sync_test.sh
       - name: Frontend syntax
-        run: node --check web/app.js
+        run: node --check web/app.js && node --check web/login.js
       - name: Docker build
         run: docker build --build-arg VERSION=ci -t coralbay-rules:ci .

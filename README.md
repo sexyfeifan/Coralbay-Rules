@@ -7,7 +7,7 @@ Docker Hub：`sexyfeifan/coralbay-rules:latest`
 
 ## Web 管理界面
 
-- `/`：唯一的管理入口。未登录时显示密码页，登录后进入全功能控制台；默认密码为 `sexyfeifan`，建议安装后通过 `rules` → “修改管理员密码”立即更换。
+- `/`：唯一的管理入口。未登录时显示密码页，登录后进入全功能控制台；首次安装要求设置至少 12 位管理员密码，隐藏输入并二次确认。已有安装保留原密码，可执行 `sudo rules password` 修改。
 - `/admin/`：永久跳转到 `/`，不再保留第二套页面或公开状态首页。
 - Docker Socket 只挂载给独立更新器；主程序无法直接操作 Docker，更新器也只匹配 `coralbay-rules` scope。
 
@@ -16,10 +16,12 @@ Docker Hub：`sexyfeifan/coralbay-rules:latest`
 
 ## 一键安装
 
-服务器需要预先安装 Docker Engine 和 Docker Compose 插件。
+用于 Linux x86_64 / ARM64 服务器，需要预先安装 Docker Engine、Docker Compose 插件、curl 和 coreutils，并准备已有的 Nginx/PPanel/OpenResty 反向代理和 HTTPS 证书。本脚本负责部署 CoralBay 服务，不自动安装 Docker 或接管服务器的 80/443 端口。
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" | sudo bash
+script=$(mktemp)
+curl -fsSL --connect-timeout 15 --max-time 120 "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" -o "$script" && sudo bash "$script" install
+rm -f "$script"
 ```
 
 运行后显示中文管理菜单：
@@ -34,7 +36,8 @@ curl -fsSL "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/ins
 7. 升级程序（管理脚本 + 容器镜像）
 8. 检测公网规则地址
 9. 卸载
-10. 查看项目信息
+  10. 查看项目信息
+  11. 修改管理员密码
 0. 退出
 ```
 
@@ -48,11 +51,15 @@ sudo 666
 
 管理快捷命令仅保留 `sudo rules` 和 `sudo 666`。
 
-旧版本执行 `sudo rules update` 时会自动备份并刷新 Compose 配置，并为旧安装补齐控制台密码与订阅转换服务。
+执行 `sudo rules update` 会下载并校验新管理脚本，再由新脚本完成升级，备份并刷新 Compose 配置，为旧安装补齐必要设置。自定义安装目录会保存在 `/etc/coralbay-rules/install-dir`，后续菜单默认使用该目录。也可通过 `sudo env CORALBAY_INSTALL_DIR=/srv/coralbay rules update` 指定已有安装。
+
+从旧版管理脚本升级到 v4.11.3 时，推荐先按上面的下载方式获取最新脚本，把最后的 `install` 改成 `update`，以便本次升级直接使用新的检查逻辑。
 
 也可以直接执行子命令，例如 `sudo rules status`、`sudo rules sync`、`sudo rules logs` 和 `sudo rules update`。
 
-重新配置前会自动备份 `.env`、Compose 和 Caddy 配置；脚本也会检测 80/443、避免重复安装时误判自己的 3999 端口，并在启动后执行健康检查。
+脚本先校验候选 Compose 并成功拉取镜像，再替换配置；失败时保留原配置。它会核对监听端口所属容器和安装目录，并检查应用及订阅后端能否响应；启动检查失败会报错并恢复已有配置，不会显示升级成功。备份保存在安装目录的 `backups/`，不包含完整规则与订阅数据；失败后已拉取的镜像不会自动回退。
+
+重新配置时选择的同步间隔会覆盖以前在网页保存的设置。应用版本或规则域名变化后会立即触发规则同步；上游暂时不可用时继续保留旧规则。
 
 ## 本地图标镜像
 
@@ -186,6 +193,16 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 ```
 
 ## 可靠性
+
+### v4.11.3 修复
+
+- 同步和回滚共用内核文件锁；进程异常退出后自动释放，旧 `.sync.lock` 目录不再阻塞更新。
+- 修复登录限流可通过更换 TCP 连接绕过的问题；不会信任未经验证的转发 IP 请求头。
+- 已停用或删除的订阅重新生成相同参数时返回明确提示，要求先恢复，不交付无法拉取的链接。
+- Clash/Stash 节点计数使用 YAML 解析，兼容行内列表、无缩进列表和不同字段顺序。
+- 独立同步循环在上游下载失败时立即中止该次发布；版本或域名变化后主动同步。
+- 安装脚本不再执行 `.env` 内容，支持安全重配置、目录记忆和实际启动检查。
+- 详细验证和发布边界见 [v4.11.3 实施报告](REVIEW-4.11.3.md)。
 
 ### v4.11 链接管理与安全升级
 

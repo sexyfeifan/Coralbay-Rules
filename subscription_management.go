@@ -2,10 +2,13 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
 )
+
+var errSubscriptionDisabled = errors.New("相同配置的订阅已停用或已删除，请先在订阅管理中恢复（已删除订阅位于回收站）")
 
 func (s *server) registerSubscription(raw, target string) error {
 	s.mu.Lock()
@@ -20,6 +23,16 @@ func (s *server) registerSubscription(raw, target string) error {
 	}
 	defer tx.Rollback()
 	if e = insertUsage(tx, &subscriptionUsage{ID: usageID(raw), URL: raw, Target: target}); e != nil {
+		return e
+	}
+	var disabled, archived bool
+	if e = tx.QueryRow("SELECT disabled,archived FROM links WHERE id=?", usageID(raw)).Scan(&disabled, &archived); e != nil {
+		return e
+	}
+	if disabled || archived {
+		return errSubscriptionDisabled
+	}
+	if _, e = tx.Exec("UPDATE links SET url=? WHERE id=?", raw, usageID(raw)); e != nil {
 		return e
 	}
 	return tx.Commit()

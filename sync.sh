@@ -7,9 +7,10 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.11.2}"
+generator_version="${GENERATOR_VERSION:-4.11.3}"
 generator_version="${generator_version#v}"
-lock_dir="/data/.sync.lock"
+data_dir="${DATA_DIR:-/data}"
+lock_file="$data_dir/.publish.lock"
 
 log() {
   printf '%s [sync] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -37,19 +38,22 @@ validate_release() {
   VALIDATED_COUNT="$count"
 }
 
-sync_once() {
-  mkdir -p /data/releases
-  if ! mkdir "$lock_dir" 2>/dev/null; then
+sync_once() (
+  mkdir -p "$data_dir/releases"
+  exec 9>"$lock_file"
+  if ! flock -n 9; then
     log "已有同步任务正在运行" >&2
     return 75
   fi
-  staging="/data/.staging.$$"
-  geo_staging="/data/.geo-staging.$$"
-  build_dir="/data/.release-build.$$"
+  staging="$data_dir/.staging.$$"
+  geo_staging="$data_dir/.geo-staging.$$"
+  build_dir="$data_dir/.release-build.$$"
   rm -rf "$staging"
   rm -rf "$geo_staging"
   rm -rf "$build_dir"
-  trap 'rm -rf "$staging" "$geo_staging" "$build_dir"; rmdir "$lock_dir" 2>/dev/null || true' EXIT INT TERM
+  trap 'rm -rf "$staging" "$geo_staging" "$build_dir"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   log "开始同步 $repository ($branch)"
   git clone --quiet --depth 1 --single-branch --branch "$branch" "$repository" "$staging"
@@ -63,7 +67,7 @@ sync_once() {
   geo_short="$(printf '%s' "$geo_commit" | cut -c1-12)"
   config_hash="$(printf '%s' "$mirror_domain" | sha256sum | cut -c1-12)"
   release_id="${commit}-${geo_short}-v${generator_version}-${config_hash}"
-  release_dir="/data/releases/$release_id"
+  release_dir="$data_dir/releases/$release_id"
   rm -rf "$staging/.git"
   mv "$staging" "$build_dir"
 
@@ -275,7 +279,7 @@ sync_once() {
     return 1
   fi
   cat > "$build_dir/_mirror/status.json.next" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT,"mihomopro_origin":"$mihomopro_origin"}
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","mirror_domain":"$mirror_domain","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT,"mihomopro_origin":"$mihomopro_origin"}
 EOF
   mv -f "$build_dir/_mirror/status.json.next" "$build_dir/_mirror/status.json"
   cat > "$build_dir/index.html.next" <<EOF
@@ -301,22 +305,21 @@ EOF
   else
     mv "$build_dir" "$release_dir"
   fi
-  current_next="/data/.current.$$"
+  current_next="$data_dir/.current.$$"
   ln -s "releases/$release_id" "$current_next"
   # -T is essential on BusyBox: without it an existing directory symlink is
   # followed and the temporary link is moved inside the active release.
-  mv -Tf "$current_next" /data/current
+  mv -Tf "$current_next" "$data_dir/current"
 
   # 保留当前版本以及最近两个历史版本。
-  ls -1dt /data/releases/* 2>/dev/null | awk 'NR > 3' | while IFS= read -r old_release; do
+  ls -1dt "$data_dir"/releases/* 2>/dev/null | awk 'NR > 3' | while IFS= read -r old_release; do
     [ "$old_release" = "$release_dir" ] || rm -rf "$old_release"
   done
 
   rm -rf "$geo_staging"
-  rmdir "$lock_dir" 2>/dev/null || true
   trap - EXIT INT TERM
   log "同步完成，当前版本 $release_id，共校验 $VALIDATED_COUNT 个文件"
-}
+)
 
 run_once="false"
 [ "${1:-}" = "once" ] && run_once="true"
@@ -327,7 +330,7 @@ if [ "$run_once" = "true" ]; then
 fi
 
 while :; do
-  if ! sync_once; then
+  if ! "$0" once; then
     log "同步失败，继续保留上一次有效版本" >&2
   fi
   sleep "$interval"

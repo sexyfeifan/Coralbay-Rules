@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -187,6 +188,10 @@ func (s *server) createSubscriptionLinkV2(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err = s.registerSubscription(link, body.Target); err != nil {
+		if errors.Is(err, errSubscriptionDisabled) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, 503, map[string]string{"error": "链接登记失败（存储不可用或已达 10000 条上限），未生成可交付链接"})
 		return
 	}

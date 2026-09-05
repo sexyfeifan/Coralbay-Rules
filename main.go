@@ -11,6 +11,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,9 +27,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
+	"gopkg.in/yaml.v3"
 )
 
-var version = "4.11.2"
+var version = "4.11.3"
 
 //go:embed web/*
 var webFS embed.FS
@@ -118,6 +122,7 @@ type mirrorStatus struct {
 	GeoCommit        string `json:"geo_commit"`
 	ReleaseID        string `json:"release_id"`
 	GeneratorVersion string `json:"generator_version"`
+	MirrorDomain     string `json:"mirror_domain"`
 	SyncedAt         string `json:"synced_at"`
 	ValidatedFiles   int    `json:"validated_files"`
 }
@@ -140,11 +145,14 @@ func main() {
 		updaterURL:      env("UPDATER_URL", "http://updater:8080/v1/update"),
 		updaterToken:    os.Getenv("UPDATER_TOKEN"),
 		actionToken:     os.Getenv("ADMIN_ACTION_TOKEN"),
-		adminPassword:   env("ADMIN_PASSWORD", "sexyfeifan"),
+		adminPassword:   os.Getenv("ADMIN_PASSWORD"),
 		subconverterURL: env("SUBCONVERTER_URL", "http://subconverter:25500"),
 		interval:        time.Duration(intervalSeconds) * time.Second,
 		scheduleReset:   make(chan time.Duration, 1),
 		actionTimes:     make(map[string]time.Time),
+	}
+	if s.adminPassword == "" || s.actionToken == "" {
+		log.Fatal("ADMIN_PASSWORD and ADMIN_ACTION_TOKEN must be configured; run the installer first")
 	}
 	if _, err := s.loadSubscriptionKeys(); err != nil {
 		log.Fatal("subscription signing keys unavailable: ", err)
@@ -209,7 +217,8 @@ func main() {
 	go s.refreshRemoteConfigs(context.Background())
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("CoralBay Rules v%s listening on %s", version, addr)
-	log.Fatal(http.ListenAndServe(addr, securityHeaders(mux)))
+	srv := &http.Server{Addr: addr, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }
 
 func env(key, fallback string) string {
@@ -554,16 +563,17 @@ func convertedNodeCount(target string, content []byte) int {
 		return count
 	}
 	if target == "clash" || target == "stash" || target == "clashr" {
-		inProxies, count := false, 0
-		for _, line := range strings.Split(text, "\n") {
-			if line == "proxies:" {
-				inProxies = true
-				continue
-			}
-			if inProxies && len(line) > 0 && line[0] != ' ' {
-				break
-			}
-			if inProxies && strings.HasPrefix(strings.TrimSpace(line), "type:") {
+		var doc struct {
+			Proxies []struct {
+				Type string `yaml:"type"`
+			} `yaml:"proxies"`
+		}
+		if yaml.Unmarshal(content, &doc) != nil {
+			return 0
+		}
+		count := 0
+		for _, proxy := range doc.Proxies {
+			if proxy.Type != "" {
 				count++
 			}
 		}
@@ -852,7 +862,13 @@ func (s *server) validSession(r *http.Request) bool {
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.allowAction("login:" + r.RemoteAddr) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	// Normalize before adding a namespace; otherwise the prefix breaks IPv4
+	// host:port parsing and each new TCP connection gets a fresh allowance.
+	if !s.allowActionKey("login:" + host) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "请稍后再试"})
 		return
 	}
@@ -884,6 +900,10 @@ func (s *server) allowAction(remote string) bool {
 	if err != nil {
 		host = remote
 	}
+	return s.allowActionKey(host)
+}
+
+func (s *server) allowActionKey(host string) bool {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -960,7 +980,7 @@ func (s *server) cachedLatestVersion() releaseInfo {
 }
 
 func (s *server) scheduler() {
-	if _, err := s.readStatus(); err != nil {
+	if status, err := s.readStatus(); err != nil || status.GeneratorVersion != version || status.MirrorDomain != s.domain {
 		s.startSync()
 	}
 	timer := time.NewTimer(s.scheduleDeadline(true, s.interval))
@@ -1217,6 +1237,16 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "版本号无效"})
 		return
 	}
+	lock, err := s.lockRelease()
+	if err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "同步或回滚正在进行，请稍后重试"})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "无法锁定规则目录"})
+		}
+		return
+	}
+	defer lock.Close()
 	target := filepath.Join(s.dataDir, "releases", body.Commit)
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		writeJSON(w, 404, map[string]string{"error": "版本不存在"})
