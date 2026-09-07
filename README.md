@@ -1,73 +1,134 @@
 # CoralBay Rules
 
-稳定、自托管的 666OS Mihomo MRS 规则镜像。项目定时同步
-[`666OS/rules`](https://github.com/666OS/rules) 的 `release` 分支，在全部规则通过校验后才原子切换上线版本；同步失败时继续提供上一次有效规则。
+自托管的订阅转换、分流配置与规则镜像平台。提供原始订阅合并、客户端配置生成、固定订阅链接、PPanel 模板，以及相互独立的 **666OS 规则镜像**和 **MetaCubeX 自定义分流**。
 
-Docker Hub：`sexyfeifan/coralbay-rules:latest`
+**当前版本：4.12.0** · Linux amd64 / arm64 · Docker Compose 部署
 
-## Web 管理界面
+[搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [4.12.0 更新说明](RELEASE-4.12.0.md)
 
-- `/`：默认管理入口。未登录时显示密码页，登录后进入全功能控制台；首次安装要求设置至少 12 位管理员密码，隐藏输入并二次确认。已有安装保留原密码，可执行 `sudo rules password` 修改。
-- `/routing`：自定义分流订阅子页面，使用同一管理员登录。桌面导航按总览、订阅服务、客户端配置、规则与配置源、系统维护分组；移动端使用抽屉。原有页面 hash 入口继续有效。
-- `/admin/`：永久跳转到 `/`，不再保留第二套页面或公开状态首页。
-- Docker Socket 只挂载给独立更新器；主程序无法直接操作 Docker，更新器也只匹配 `coralbay-rules` scope。
+项目使用你已有的代理订阅，不提供代理节点。部署和使用不依赖 PPanel 或 Nextin；PPanel 用户可另外使用模板功能。
 
-仓库包含 Push/PR 持续集成以及 Tag/手动触发的多架构 Docker 发布工作流。发布镜像包含 OCI 来源标签、SBOM 和 provenance。使用前在 GitHub 仓库中添加
-`DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 两个 Actions secrets。
+## 功能选择
 
-## 一键安装
+| 你想完成的事 | 使用入口 | 交付内容 |
+| --- | --- | --- |
+| 合并、筛选、重命名节点，转换为不同客户端格式 | 订阅服务 → 普通订阅转换 | 可更新的签名 `/sub` 链接 |
+| 让 AI、视频、社交等服务使用不同节点或策略 | 订阅服务 → 自定义分流订阅 | Mihomo / OpenClash / Stash 的完整分流配置链接 |
+| 查看已有链接、停用或恢复、查看拉取记录 | 订阅服务 → 订阅管理 | 普通转换与自定义分流分别管理 |
+| 给 PPanel 配置客户端订阅模板 | 客户端配置 → PPanel 模板 | 供 PPanel 渲染的 `.gotmpl` 模板 |
+| 为 OpenClash 使用 MihomoPro 覆写 | 客户端配置 → MihomoPro 覆写 | 覆写文件与使用说明 |
+| 镜像 666OS 的规则文件、查看和同步可读源 | 规则与配置源 → 666OS 规则资源 | Mihomo、sing-box、Surge 原生产物和转换产物 |
+| 查看新分流规则的内容、版本与上游来源 | 规则与配置源 → MetaCubeX 分流源 | 78 项独立规则目录与同步状态 |
 
-用于 Linux x86_64 / ARM64 服务器，需要预先安装 Docker Engine、Docker Compose 插件、curl 和 coreutils，并准备已有的 Nginx/PPanel/OpenResty 反向代理和 HTTPS 证书。本脚本负责部署 CoralBay 服务，不自动安装 Docker 或接管服务器的 80/443 端口。
+桌面使用分组侧栏，手机使用抽屉。默认登录入口为 `/`；新分流页面为 `/routing`，规则源页面为 `/routing#sources`。原有 hash 页面入口继续有效，`/admin/` 跳转至 `/`。
 
-```bash
-script=$(mktemp)
-curl -fsSL --connect-timeout 15 --max-time 120 "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" -o "$script" && sudo bash "$script" install
-rm -f "$script"
-```
+## 快速搭建
 
-运行后显示中文管理菜单：
+准备一台 Linux x86_64 / ARM64 服务器、Root 或 sudo 权限、正在运行的 Docker Engine 和 Docker Compose 插件，以及 Bash、curl、coreutils、awk。域名需要解析到你的服务器，并由已有 Nginx / OpenResty 或反代面板提供 HTTPS。详细前提及 Docker 官方安装链接见[搭建指南](docs/deployment.md)。
 
-```text
-1. 安装 / 重新配置
-2. 查看运行状态
-3. 立即同步规则
-4. 获取 PPanel 订阅模板下载链接
-5. HTTPS 证书管理
-6. 查看最近日志
-7. 升级程序（管理脚本 + 容器镜像）
-8. 检测公网规则地址
-9. 卸载
-  10. 查看项目信息
-  11. 修改管理员密码
-0. 退出
-```
+下文 `rules.example.com` 均为示例，请替换成你自己的域名。
 
-首次安装完成后，脚本会注册系统快捷命令。以后通过 SSH 登录服务器，直接执行即可重新打开菜单：
+在服务器的交互式 SSH 终端执行：
 
 ```bash
-sudo rules
-# 或
-sudo 666
+(
+  set -eu
+  coralbay_installer="$(mktemp)"
+  trap 'rm -f "$coralbay_installer"' EXIT
+  curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+    "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" \
+    -o "$coralbay_installer"
+  bash -n "$coralbay_installer"
+  sudo bash "$coralbay_installer" install
+)
 ```
 
-管理快捷命令仅保留 `sudo rules` 和 `sudo 666`。
+此命令直接进入安装问答，默认安装公开的 `sexyfeifan/coralbay-rules:latest` 镜像。安装者无需 Fork 仓库、GitHub Secrets 或 Docker Hub 登录。
 
-执行 `sudo rules update` 会下载并校验新管理脚本，再由新脚本完成升级，备份并刷新 Compose 配置，为旧安装补齐必要设置。自定义安装目录会保存在 `/etc/coralbay-rules/install-dir`，后续菜单默认使用该目录。也可通过 `sudo env CORALBAY_INSTALL_DIR=/srv/coralbay rules update` 指定已有安装。
+按提示填写：
 
-从旧版管理脚本升级到 v4.11.3 时，推荐先按上面的下载方式获取最新脚本，把最后的 `install` 改成 `update`，以便本次升级直接使用新的检查逻辑。
+| 配置 | 说明 |
+| --- | --- |
+| 安装目录 | 默认 `/opt/coralbay-rules`；使用独立子目录 |
+| 规则域名 | 必填，例如 `rules.example.com`，不带 `https://` 或路径 |
+| 本地端口 | 默认 `3999`；容器仅绑定宿主机 `127.0.0.1`，遇到占用可更换 |
+| 666OS 同步间隔 | 默认 6 小时；与新 MetaCubeX 规则同步独立 |
+| 管理员密码 | 首次安装至少 12 位，隐藏输入并二次确认；允许字母、数字及 `._@+-` |
 
-也可以直接执行子命令，例如 `sudo rules status`、`sudo rules sync`、`sudo rules logs` 和 `sudo rules update`。
+随后在已有 HTTPS 站点中，将域名反向代理至 `http://127.0.0.1:3999`（如果更换端口，相应调整）。安装器不接管 80/443，也不申请或续期证书。反代配置、容器化反代注意事项及超时设置见[完整搭建指南](docs/deployment.md)。
 
-脚本先校验候选 Compose 并成功拉取镜像，再替换配置；失败时保留原配置。它会核对监听端口所属容器和安装目录，并检查应用及订阅后端能否响应；启动检查失败会报错并恢复已有配置，不会显示升级成功。备份保存在安装目录的 `backups/`，不包含完整规则与订阅数据；失败后已拉取的镜像不会自动回退。
+访问 `https://你的域名/`，使用安装时设置的密码登录。首次 666OS 同步完成后可使用镜像和模板；新分流的规则会按需下载，也可在 MetaCubeX 分流源页先同步全部目录。
 
-重新配置时选择的同步间隔会覆盖以前在网页保存的设置。应用版本或规则域名变化后会立即触发规则同步；上游暂时不可用时继续保留旧规则。
+## 已安装用户升级
+
+升级前按[完整备份步骤](docs/deployment.md#备份与回退)保留 `.env`、`compose.yaml` 和整个 `data/`。安装脚本自带的备份仅覆盖配置文件，不包含订阅数据库、密钥和规则数据。
+
+升级到 `latest`：
+
+```bash
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:latest rules update
+```
+
+固定到本次发布的 4.12.0：
+
+```bash
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.12.0 rules update
+```
+
+`rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
+
+启动检查失败时会保留或恢复原配置并报错，已拉取的镜像不会自动回退。已有安装日常升级使用 `update`；`install` 用于首次安装或重新配置，重新选择的同步间隔会覆盖网页保存的设置。
+
+## 日常管理
+
+安装后执行 `sudo rules` 或 `sudo 666` 打开中文管理菜单，也可直接运行：
+
+| 命令 | 作用 |
+| --- | --- |
+| `sudo rules status` | 查看容器和 666OS 规则状态 |
+| `sudo rules logs` | 查看服务日志 |
+| `sudo rules sync` | 立即同步旧 666OS 规则；MetaCubeX 在独立规则源页面同步 |
+| `sudo rules template` | 获取 PPanel 模板地址 |
+| `sudo rules password` | 修改管理员密码 |
+| `sudo rules certificate` | 检测公网 HTTPS，证书由现有反代管理 |
+| `sudo rules update` | 按当前镜像设置升级管理脚本和容器 |
+
+安装目录会记在 `/etc/coralbay-rules/install-dir`。命令中的目录提示默认使用该目录，也可用 `CORALBAY_INSTALL_DIR` 明确指定。卸载、故障排查和恢复说明见[搭建指南](docs/deployment.md)。
+
+## 自定义分流订阅（4.12.0）
+
+4.12.0 新增独立分流页面，把原始订阅中的节点与自选分流策略重新组合，生成可持续更新的完整配置链接。功能范围与验证边界见 [4.12.0 发布说明](RELEASE-4.12.0.md)，实现阶段的本地验证保留在 [预览记录](REVIEW-4.12.0-preview.md)。
+
+1. 打开 `/routing`，输入方案名称和 1–8 个原始 HTTP(S) 订阅链接。
+2. 选择 Mihomo、OpenClash 或 Stash，勾选 AI、流媒体、社交、开发等分流规则。
+3. 设置全局地区、包含/排除正则；每个业务规则可继承全局、指定自己的节点筛选与策略，或选择直连/拦截。代理组支持手选、自动测速与故障转移。
+4. 预览匹配节点、策略组、规则顺序和完整 YAML。空组、未知字段或无法保持语义的协议参数会阻止发布。
+5. 保存后获得 `/routing/sub/{token}/{client}` 固定链接，可复制、下载或生成二维码。编辑方案后，用户更新同一地址取得新配置；停用和重置令牌作用于新模块自己的链接。
+
+首版的输入与输出范围：
+
+| 项目 | 支持范围 |
+| --- | --- |
+| 完整配置输出 | Mihomo / OpenClash、Stash 的 YAML，包含节点、策略组、DNS 骨架和内嵌的原生规则 |
+| 原生 YAML 输入 | 直接包含 `proxies` 的 SS、VMess、VLESS、Trojan、Hysteria2、TUIC、HTTP、SOCKS5 节点；字段按协议与目标客户端校验 |
+| URI / Base64 输入 | SS、VMess、VLESS、Trojan、Hysteria2 / `hy2` 的受支持参数；尚不接受的扩展会明确报错，可改用兼容的原生 YAML |
+| 输入边界 | 不展开远程 `proxy-providers`；不继承上游配置里的规则、DNS、脚本与策略组。单个订阅最多 8 MiB，合并最多 5,000 个节点 |
+| 客户端边界 | 不输出 Surge、Loon、sing-box 等其他软件的完整分流配置；Stash 未验证的特定字段会拒绝输出，尚未做 Stash 真机验收 |
+
+新规则目录直接同步 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 78 项来源；域名采用 `geo/geosite/classical/`，IP 采用 `geo/geoip/`，保留精确域名、后缀、关键词、正则与 IPv4/IPv6 语义。规则全部内嵌到新配置，不依赖 Nextin 或旧 666OS 规则服务。BT Tracker 是 BT 跟踪服务器集合，默认代理，未纳入推荐广告拦截。来源映射、许可与实际文件验证见 [来源说明](docs/reference/metacubex-routing-source-notice.md)。
+
+新方案和交付统计保存到 `$DATA_DIR/routing/routing.sqlite`，新规则快照保存到 `$DATA_DIR/routing/rules`。旧 `/sub`、旧订阅历史、`$DATA_DIR/current` 和 666OS 同步/回滚目录沿用原行为。导航中的订阅管理分别展示普通转换和自定义分流记录；整理导航不会迁移旧数据。
+
+客户端拉取时，新配置构建缓存为 5 分钟，同一方案的并发刷新合并执行；节点刷新失败返回错误并保留已存输出，不把旧节点配置静默当成刷新成功。失败后有 30 秒重试冷却。规则按需读取，24 小时后检查更新，也可在 MetaCubeX 分流源页面手动全量同步；每个候选快照固定到同一提交并通过 SHA-256 校验后原子发布。规则更新失败时继续使用本模块上一份有效快照并显示警告，不回退到旧 666OS 来源。客户端建议更新间隔与服务器的 5 分钟构建缓存分别设置。
+
+地区识别依据节点名称，不是实际出口测量或服务解锁检测。配置结构校验不能替代各客户端中的连接、路由命中和订阅更新验收。
 
 ## 本地图标镜像
 
 PPanel 模板使用的 27 个 Qure 策略组图标已经固化在 Docker 镜像中。同步时会复制到 `/_assets/icons/`，并自动把生成模板里的 GitHub 图标地址替换为当前规则域名，例如：
 
 ```text
-https://rules.coralbay.top/_assets/icons/Auto.png
+https://rules.example.com/_assets/icons/Auto.png
 ```
 
 这些图标只用于 OpenClash/Mihomo 面板展示，不参与节点测速或流量分流。图标来源：[Koolson/Qure](https://github.com/Koolson/Qure)，固定于上游提交 `b16b260625f873266f6a6a9b88710132774997b8`。
@@ -103,34 +164,6 @@ Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端�
 
 转换后端只在 Compose 内网提供服务，订阅不会发送给公共转换站；项目不提供公共短链接，也不执行用户提交的任意 JavaScript。
 
-## 自定义分流订阅（4.12.0）
-
-4.12.0 新增独立分流页面，把原始订阅中的节点与自选分流策略重新组合，生成可持续更新的完整配置链接。功能范围与验证边界见 [4.12.0 发布说明](RELEASE-4.12.0.md)，实现阶段的本地验证保留在 [预览记录](REVIEW-4.12.0-preview.md)。
-
-1. 打开 `/routing`，输入方案名称和 1–8 个原始 HTTP(S) 订阅链接。
-2. 选择 Mihomo、OpenClash 或 Stash，勾选 AI、流媒体、社交、开发等分流规则。
-3. 设置全局地区、包含/排除正则；每个业务规则可继承全局、指定自己的节点筛选与策略，或选择直连/拦截。代理组支持手选、自动测速与故障转移。
-4. 预览匹配节点、策略组、规则顺序和完整 YAML。空组、未知字段或无法保持语义的协议参数会阻止发布。
-5. 保存后获得 `/routing/sub/{token}/{client}` 固定链接，可复制、下载或生成二维码。编辑方案后，用户更新同一地址取得新配置；停用和重置令牌作用于新模块自己的链接。
-
-首版的输入与输出范围：
-
-| 项目 | 支持范围 |
-| --- | --- |
-| 完整配置输出 | Mihomo / OpenClash、Stash 的 YAML，包含节点、策略组、DNS 骨架和内嵌的原生规则 |
-| 原生 YAML 输入 | 直接包含 `proxies` 的 SS、VMess、VLESS、Trojan、Hysteria2、TUIC、HTTP、SOCKS5 节点；字段按协议与目标客户端校验 |
-| URI / Base64 输入 | SS、VMess、VLESS、Trojan、Hysteria2 / `hy2` 的受支持参数；尚不接受的扩展会明确报错，可改用兼容的原生 YAML |
-| 输入边界 | 不展开远程 `proxy-providers`；不继承上游配置里的规则、DNS、脚本与策略组。单个订阅最多 8 MiB，合并最多 5,000 个节点 |
-| 客户端边界 | 不输出 Surge、Loon、sing-box 等其他软件的完整分流配置；Stash 未验证的特定字段会拒绝输出，尚未做 Stash 真机验收 |
-
-新规则目录直接同步 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 78 项来源；域名采用 `geo/geosite/classical/`，IP 采用 `geo/geoip/`，保留精确域名、后缀、关键词、正则与 IPv4/IPv6 语义。规则全部内嵌到新配置，不依赖 Nextin 或旧 666OS 规则服务。BT Tracker 是 BT 跟踪服务器集合，默认代理，未纳入推荐广告拦截。来源映射、许可与实际文件验证见 [来源说明](docs/reference/metacubex-routing-source-notice.md)。
-
-新方案和交付统计保存到 `$DATA_DIR/routing/routing.sqlite`，新规则快照保存到 `$DATA_DIR/routing/rules`。旧 `/sub`、旧订阅历史、`$DATA_DIR/current` 和 666OS 同步/回滚目录沿用原行为。导航中的订阅管理分别展示普通转换和自定义分流记录；整理导航不会迁移旧数据。
-
-客户端拉取时，新配置构建缓存为 5 分钟，同一方案的并发刷新合并执行；节点刷新失败返回错误并保留已存输出，不把旧节点配置静默当成刷新成功。失败后有 30 秒重试冷却。规则按需读取，24 小时后检查更新，也可在 MetaCubeX 分流源页面手动全量同步；每个候选快照固定到同一提交并通过 SHA-256 校验后原子发布。规则更新失败时继续使用本模块上一份有效快照并显示警告，不回退到旧 666OS 来源。客户端建议更新间隔与服务器的 5 分钟构建缓存分别设置。
-
-地区识别依据节点名称，不是实际出口测量或服务解锁检测。配置结构校验不能替代各客户端中的连接、路由命中和订阅更新验收。
-
 ## 666OS 原生规则转换产物
 
 同步服务会调用独立的 `coralbay-ruleconvert`，从同一次 666OS `geo` 快照生成两种可审计产物：
@@ -150,43 +183,12 @@ Compose 内置自托管的 `subconverter-ng` 后端，但不直接暴露其端�
 
 同步 `release` 分支 MRS 的同时，项目会同步 666OS `geo` 分支的可读源。控制台可展开 Google 等存在映射的规则并搜索全部条目；未公开对应可读源的 MRS 会明确显示“暂无公开可读源”。
 
-## 与 PPanel/Nginx 共存部署
-
-容器默认只监听 `127.0.0.1:3999`，再由已有 Nginx 将规则域名反向代理到该端口，避免抢占 PPanel 的 80/443。安装脚本会同时检查系统监听端口和 Docker 端口映射；如果 3999 已占用，会提示选择其他 1024–65535 端口。
-
-安装过程不再询问部署模式或证书邮箱。规则域名必须由使用者输入且没有预设值；HTTPS 证书继续由现有的 Nginx、PPanel 或 OpenResty 管理。
-
-菜单“升级程序”会同时更新本机管理脚本与 Docker 镜像。也可以直接执行 `sudo rules update`。
-
-Nginx 示例：
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name rules.coralbay.top;
-
-    location / {
-        proxy_pass http://127.0.0.1:3999;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-## 验证
-
-```bash
-curl -fsS https://rules.coralbay.top/_mirror/status.json
-curl -fsSI https://rules.coralbay.top/mihomo/domain/AI.mrs
-```
-
 ## PPanel 模板修改
 
 每次规则同步都会同时生成一份已经替换为当前镜像域名的 PPanel 模板：
 
 ```text
-https://rules.coralbay.top/_templates/ppanel_openclash_pro_cn.gotmpl
+https://rules.example.com/_templates/ppanel_openclash_pro_cn.gotmpl
 ```
 
 管理菜单可以显示并检测该下载链接。下载文件后，由用户在 PPanel 客户端管理页面手动替换 `OpenClash Pro` 的订阅模板。
@@ -202,7 +204,7 @@ https://github.com/666OS/rules/raw/release/
 替换为：
 
 ```text
-https://rules.coralbay.top/
+https://rules.example.com/
 ```
 
 建议继续保留代理下载兜底：
@@ -223,6 +225,32 @@ x-rule-set-ipcidr: &rule-set-ipcidr
   proxy: 全球手动
 ```
 
+## 开发与镜像发布
+
+直接部署公开镜像不需要下面的配置。以下步骤用于维护本项目或发布自己的 Fork：
+
+- `main` 推送与 Pull Request 运行 GitHub CI，包括 Go 竞态测试、格式和静态检查、Shell 回归、前端语法及 Docker 构建。
+- Docker 工作流由 `v*` 标签或手动触发。发布者需要设置 `DOCKERHUB_USERNAME` 和具有目标仓库写入权限的 `DOCKERHUB_TOKEN`；不要把凭据写进代码或 `.env` 示例。
+- Fork 发布时，修改 `.github/workflows/docker.yml` 中的镜像命名空间，并相应调整安装器默认镜像或通过 `CORALBAY_IMAGE` 指定自己的镜像。
+- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如 `v4.12.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
+- Docker 工作流不会创建 GitHub Release。完成镜像发布后另外创建正式 Release，控制台通过 GitHub Releases 查询新版本。
+
+本地开发验证：
+
+```bash
+go test -race ./...
+go vet ./...
+bash -n install.sh
+sh -n sync.sh
+bash tests/install_test.sh
+bash tests/sync_test.sh
+node --check web/app.js
+node --check web/login.js
+node --check web/routing.js
+```
+
+`sync_test.sh` 需要 Linux 的 `flock`；macOS 上的跳过不能代替 Linux 回归。当前实现与运行边界见各版本记录及[规则来源说明](docs/reference/metacubex-routing-source-notice.md)。
+
 ## 可靠性
 
 ### v4.11.4 Stash TLS 修复
@@ -241,7 +269,7 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 
 ### v4.11 链接管理与安全升级
 
-- 订阅转换 → 链接管理：查看拉取次数、筛选分页、停用/恢复、更新签名和服务器连通性抽测。
+- 订阅管理 → 普通转换：查看拉取次数、筛选分页、停用/恢复、更新签名和服务器连通性抽测。
 - 清除历史不会撤销订阅；停用阻止未来拉取，不能撤回已下载配置。
 - 新链接独立 v2 签名；升级前旧链接兼容 90 天，请在管理页“更新签名”后复制到客户端。
 - 新的出站隔离需要升级安装脚本及 Compose，不是只更新 app 镜像。
