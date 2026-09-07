@@ -2,9 +2,9 @@
 
 自托管的订阅转换、分流配置与规则镜像平台。提供原始订阅合并、客户端配置生成、固定订阅链接、PPanel 模板，以及相互独立的 **666OS 规则镜像**和 **MetaCubeX 自定义分流**。
 
-**当前版本：4.12.0** · Linux amd64 / arm64 · Docker Compose 部署
+**当前版本：4.13.0** · Linux amd64 / arm64 · Docker Compose 部署
 
-[搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [4.12.0 更新说明](RELEASE-4.12.0.md)
+[搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [4.13.0 更新说明](RELEASE-4.13.0.md)
 
 项目使用你已有的代理订阅，不提供代理节点。部署和使用不依赖 PPanel 或 Nextin；PPanel 用户可另外使用模板功能。
 
@@ -57,7 +57,7 @@
 
 随后在已有 HTTPS 站点中，将域名反向代理至 `http://127.0.0.1:3999`（如果更换端口，相应调整）。安装器不接管 80/443，也不申请或续期证书。反代配置、容器化反代注意事项及超时设置见[完整搭建指南](docs/deployment.md)。
 
-访问 `https://你的域名/`，使用安装时设置的密码登录。首次 666OS 同步完成后可使用镜像和模板；新分流的规则会按需下载，也可在 MetaCubeX 分流源页先同步全部目录。
+访问 `https://你的域名/`，使用安装时设置的密码登录。首次 666OS 同步完成后可使用镜像和模板；MetaCubeX 首次启动自动补齐 78 项本地原始文件，之后独立每日同步，也可在源页手动同步。
 
 ## 已安装用户升级
 
@@ -69,10 +69,10 @@
 sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:latest rules update
 ```
 
-固定到本次发布的 4.12.0：
+固定到本次发布的 4.13.0：
 
 ```bash
-sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.12.0 rules update
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.13.0 rules update
 ```
 
 `rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
@@ -95,33 +95,44 @@ sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.12.0 rules update
 
 安装目录会记在 `/etc/coralbay-rules/install-dir`。命令中的目录提示默认使用该目录，也可用 `CORALBAY_INSTALL_DIR` 明确指定。卸载、故障排查和恢复说明见[搭建指南](docs/deployment.md)。
 
-## 自定义分流订阅（4.12.0）
+## 自定义分流订阅
 
-4.12.0 新增独立分流页面，把原始订阅中的节点与自选分流策略重新组合，生成可持续更新的完整配置链接。功能范围与验证边界见 [4.12.0 发布说明](RELEASE-4.12.0.md)，实现阶段的本地验证保留在 [预览记录](REVIEW-4.12.0-preview.md)。
+独立分流页面把原始订阅中的节点与自选策略重新组合，生成可持续更新的完整配置链接。4.13.0 增加规则本机镜像、上游来源选择和资源详情；范围与验证边界见 [4.13.0 发布说明](RELEASE-4.13.0.md)。
 
 1. 打开 `/routing`，输入方案名称和 1–8 个原始 HTTP(S) 订阅链接。
-2. 选择 Mihomo、OpenClash 或 Stash，勾选 AI、流媒体、社交、开发等分流规则。
+2. 选择 Mihomo、OpenClash 或 Stash，选择规则下载来源（默认 CoralBay 本机），勾选 AI、流媒体、社交、开发等规则。
 3. 设置全局地区、包含/排除正则；每个业务规则可继承全局、指定自己的节点筛选与策略，或选择直连/拦截。代理组支持手选、自动测速与故障转移。
 4. 预览匹配节点、策略组、规则顺序和完整 YAML。空组、未知字段或无法保持语义的协议参数会阻止发布。
 5. 保存后获得 `/routing/sub/{token}/{client}` 固定链接，可复制、下载或生成二维码。编辑方案后，用户更新同一地址取得新配置；停用和重置令牌作用于新模块自己的链接。
 
-首版的输入与输出范围：
+当前输入与输出范围：
 
 | 项目 | 支持范围 |
 | --- | --- |
-| 完整配置输出 | Mihomo / OpenClash、Stash 的 YAML，包含节点、策略组、DNS 骨架和内嵌的原生规则 |
+| 完整配置输出 | Mihomo / OpenClash、Stash 的 YAML，包含节点、策略组、DNS 骨架和规则集合；旧方案保留原生内嵌规则 |
 | 原生 YAML 输入 | 直接包含 `proxies` 的 SS、VMess、VLESS、Trojan、Hysteria2、TUIC、HTTP、SOCKS5 节点；字段按协议与目标客户端校验 |
 | URI / Base64 输入 | SS、VMess、VLESS、Trojan、Hysteria2 / `hy2` 的受支持参数；尚不接受的扩展会明确报错，可改用兼容的原生 YAML |
 | 输入边界 | 不展开远程 `proxy-providers`；不继承上游配置里的规则、DNS、脚本与策略组。单个订阅最多 8 MiB，合并最多 5,000 个节点 |
 | 客户端边界 | 不输出 Surge、Loon、sing-box 等其他软件的完整分流配置；Stash 未验证的特定字段会拒绝输出，尚未做 Stash 真机验收 |
 
-新规则目录直接同步 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 78 项来源；域名采用 `geo/geosite/classical/`，IP 采用 `geo/geoip/`，保留精确域名、后缀、关键词、正则与 IPv4/IPv6 语义。规则全部内嵌到新配置，不依赖 Nextin 或旧 666OS 规则服务。BT Tracker 是 BT 跟踪服务器集合，默认代理，未纳入推荐广告拦截。来源映射、许可与实际文件验证见 [来源说明](docs/reference/metacubex-routing-source-notice.md)。
+新规则目录直接同步 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) 的 78 项来源；域名采用 `geo/geosite/classical/`，IP 采用 `geo/geoip/`，保留精确域名、后缀、关键词、正则与 IPv4/IPv6 语义。新方案通过固定版本规则集合交付，可选择 CoralBay 本机或同提交的上游文件；旧内嵌方案保持兼容，不依赖 Nextin 或旧 666OS 规则服务。BT Tracker 是 BT 跟踪服务器集合，默认代理，未纳入推荐广告拦截。来源映射、许可与实际文件验证见 [来源说明](docs/reference/metacubex-routing-source-notice.md)。
 
 新方案和交付统计保存到 `$DATA_DIR/routing/routing.sqlite`，新规则快照保存到 `$DATA_DIR/routing/rules`。旧 `/sub`、旧订阅历史、`$DATA_DIR/current` 和 666OS 同步/回滚目录沿用原行为。导航中的订阅管理分别展示普通转换和自定义分流记录；整理导航不会迁移旧数据。
 
-客户端拉取时，新配置构建缓存为 5 分钟，同一方案的并发刷新合并执行；节点刷新失败返回错误并保留已存输出，不把旧节点配置静默当成刷新成功。失败后有 30 秒重试冷却。规则按需读取，24 小时后检查更新，也可在 MetaCubeX 分流源页面手动全量同步；每个候选快照固定到同一提交并通过 SHA-256 校验后原子发布。规则更新失败时继续使用本模块上一份有效快照并显示警告，不回退到旧 666OS 来源。客户端建议更新间隔与服务器的 5 分钟构建缓存分别设置。
+客户端拉取时，新配置构建缓存为 5 分钟，同一方案的并发刷新合并执行；节点刷新失败返回错误并保留已存输出，不把旧节点配置静默当成刷新成功。失败后有 30 秒重试冷却。MetaCubeX 独立每日同步，也可手动同步；严格本机方案构建与本地详情只读已发布副本，不因缓存过期临时联网。旧内嵌方案保留原有按需读取策略；每个候选快照固定到同一提交并通过 SHA-256 校验后原子发布。规则更新失败时继续使用本模块上一份有效快照并显示警告，不回退到旧 666OS 来源。客户端建议更新间隔与服务器的 5 分钟构建缓存分别设置。
 
 地区识别依据节点名称，不是实际出口测量或服务解锁检测。配置结构校验不能替代各客户端中的连接、路由命中和订阅更新验收。
+
+## 规则本机副本与上游来源（4.13.0）
+
+- **资源页管理内容**：666OS 与 MetaCubeX 分别显示本地版本、上游检查、文件大小与摘要；详情支持本地／上游切换、搜索和分页。查看上游不会修改活动本地版本，同步失败保留已有资源。
+- **订阅页选择使用方式**：新分流方案默认从 CoralBay 下载固定版本 YAML 集合，也可选择同提交的上游地址。两种方式保留相同规则、策略和优先级；缺少本地原始文件时需先同步，不静默回退其他来源。
+- **PPanel 模板独立选择**：Clash（Mihomo 内核）、Mihomo、OpenClash、Stash 的原始 MRS 规则模板提供本机／上游变体，原共享模板地址保持原义。转换产物没有等价上游文件的客户端不提供该切换。
+- **配置来源单独说明**：普通转换的 INI 本机镜像只代表配置文件已缓存。预设详情显示声明的本机、外部、缺失或未知规则依赖；不会自动下载全部嵌套依赖。
+
+“本机”指 CoralBay 服务器。完成首次同步后，上游不可达不影响本机规则读取；节点订阅刷新和客户端访问 CoralBay 仍需网络。固定资源分别保存在 `data/rule-resources/666os` 与 `data/routing/rules/releases`，当前不自动清理已交付引用，备份需包含整个 `data/` 并关注磁盘用量。
+
+旧方案缺少来源设置时继续内嵌；主动切换并成功保存后，已有分流交付链接保持不变。普通转换签名链接则须重新生成才能改变其参数。Stash 集合按官方格式输出并完成结构与引用检查，尚未完成 Stash 真机加载与命中验收。
 
 ## 本地图标镜像
 
@@ -232,7 +243,7 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 - `main` 推送与 Pull Request 运行 GitHub CI，包括 Go 竞态测试、格式和静态检查、Shell 回归、前端语法及 Docker 构建。
 - Docker 工作流由 `v*` 标签或手动触发。发布者需要设置 `DOCKERHUB_USERNAME` 和具有目标仓库写入权限的 `DOCKERHUB_TOKEN`；不要把凭据写进代码或 `.env` 示例。
 - Fork 发布时，修改 `.github/workflows/docker.yml` 中的镜像命名空间，并相应调整安装器默认镜像或通过 `CORALBAY_IMAGE` 指定自己的镜像。
-- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如 `v4.12.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
+- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如 `v4.13.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
 - Docker 工作流不会创建 GitHub Release。完成镜像发布后另外创建正式 Release，控制台通过 GitHub Releases 查询新版本。
 
 本地开发验证：

@@ -26,6 +26,8 @@ func (s *server) registerRoutingRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]any{"regions": routingRegions()})
 	}))
 	mux.HandleFunc("POST /api/routing/rules/sync", s.auth(s.routingRuleSyncHandler))
+	mux.HandleFunc("POST /api/routing/rules/check", s.auth(s.routingRuleCheckHandler))
+	mux.HandleFunc("GET /_rule-resources/metacubex/{revision}/{file}", s.routingRuleResourceHandler)
 	mux.HandleFunc("GET /api/routing/rules/details", s.auth(s.routingRuleDetailsHandler))
 	mux.HandleFunc("POST /api/routing/preview", s.auth(s.routingPreviewHandler))
 	mux.HandleFunc("GET /api/routing/profiles", s.auth(s.routingProfilesHandler))
@@ -366,8 +368,13 @@ func (s *server) routingSubscriptionHandler(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "subscription build invalid", 503)
 			return
 		}
+		metadata, buildErr := routingBuildMetadataJSON(p.Spec, build)
+		if buildErr != nil {
+			http.Error(w, "subscription metadata invalid", 503)
+			return
+		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		result, err := db.Exec(`UPDATE profiles SET last_built_at=?,last_error='',node_count=?,rule_revision=?,outputs=?,usage_header=?,warnings=? WHERE id=? AND version=? AND token=? AND disabled=0`, now, build.NodeCount, build.Revision, outputs, build.UsageHeader, warnings, p.ID, p.Version, token)
+		result, err := db.Exec(`UPDATE profiles SET last_built_at=?,last_error='',node_count=?,rule_revision=?,outputs=?,usage_header=?,warnings=?,build_metadata=? WHERE id=? AND version=? AND token=? AND disabled=0`, now, build.NodeCount, build.Revision, outputs, build.UsageHeader, warnings, metadata, p.ID, p.Version, token)
 		if err != nil {
 			http.Error(w, "subscription unavailable", 503)
 			return

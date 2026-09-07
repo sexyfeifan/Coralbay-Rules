@@ -17,14 +17,44 @@ type routingRuleChoice struct {
 }
 
 type routingProfileSpec struct {
-	Name          string              `json:"name"`
-	Sources       []string            `json:"sources"`
-	Clients       []string            `json:"clients"`
-	Rules         []routingRuleChoice `json:"rules"`
-	Global        routingFilter       `json:"global"`
-	Strategy      string              `json:"strategy"`
-	Match         string              `json:"match"` // proxy or direct
-	IntervalHours int                 `json:"interval_hours"`
+	Name          string               `json:"name"`
+	Sources       []string             `json:"sources"`
+	Clients       []string             `json:"clients"`
+	Rules         []routingRuleChoice  `json:"rules"`
+	Global        routingFilter        `json:"global"`
+	Strategy      string               `json:"strategy"`
+	Match         string               `json:"match"` // proxy or direct
+	IntervalHours int                  `json:"interval_hours"`
+	RuleDelivery  *routingRuleDelivery `json:"rule_delivery,omitempty"`
+}
+
+// A missing field identifies a pre-provider profile and retains inline output.
+// New clients explicitly request provider/local; validation never migrates old
+// profiles merely because they were opened or refreshed.
+type routingRuleDelivery struct {
+	Mode   string `json:"mode"`
+	Source string `json:"source,omitempty"`
+}
+
+type routingProviderPreview struct {
+	ID        string `json:"id"`
+	Revision  string `json:"revision"`
+	Behavior  string `json:"behavior"`
+	Format    string `json:"format"`
+	URL       string `json:"url"`
+	SourceURL string `json:"source_url"`
+	LocalURL  string `json:"local_url"`
+	SHA256    string `json:"sha256"`
+	Bytes     int64  `json:"bytes"`
+	Count     int    `json:"count"`
+}
+
+type routingBuildMetadata struct {
+	RuleDelivery         routingRuleDelivery      `json:"rule_delivery"`
+	RuleLibrary          string                   `json:"rule_library"`
+	GeneratedAt          string                   `json:"generated_at"`
+	RuleResources        []routingProviderPreview `json:"rule_resources"`
+	ExternalDependencies []string                 `json:"external_dependencies"`
 }
 
 type routingNodePreview struct {
@@ -42,6 +72,7 @@ type routingGroupPreview struct {
 }
 
 type routingBuildResult struct {
+	routingBuildMetadata
 	Outputs     map[string]string     `json:"outputs"`
 	NodeCount   int                   `json:"node_count"`
 	Groups      []routingGroupPreview `json:"groups"`

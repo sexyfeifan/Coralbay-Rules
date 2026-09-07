@@ -16,6 +16,7 @@ import (
 const routingCacheDuration = 5 * time.Minute
 
 type routingProfile struct {
+	routingBuildMetadata
 	ID            string             `json:"id"`
 	Spec          routingProfileSpec `json:"spec"`
 	Version       int                `json:"version"`
@@ -92,25 +93,42 @@ CREATE TRIGGER IF NOT EXISTS routing_capacity BEFORE INSERT ON profiles
 		db.Close()
 		return nil, err
 	}
+	var hasBuildMetadata int
+	if err = db.QueryRow("SELECT count(*) FROM pragma_table_info('profiles') WHERE name='build_metadata'").Scan(&hasBuildMetadata); err == nil && hasBuildMetadata == 0 {
+		_, err = db.Exec("ALTER TABLE profiles ADD COLUMN build_metadata TEXT NOT NULL DEFAULT '{}'")
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	s.routingDB = db
 	s.routingBuildSlots = make(chan struct{}, 3)
 	return db, nil
 }
 
-const routingProfileColumns = `id,spec,version,token,disabled,created_at,updated_at,last_built_at,last_error,node_count,rule_revision,requests,outputs,usage_header,warnings,last_attempt_at`
-const routingMetadataColumns = `id,spec,version,token,disabled,created_at,updated_at,last_built_at,last_error,node_count,rule_revision,requests,'{}' AS outputs,usage_header,warnings,last_attempt_at`
+const routingProfileColumns = `id,spec,version,token,disabled,created_at,updated_at,last_built_at,last_error,node_count,rule_revision,requests,outputs,usage_header,warnings,last_attempt_at,build_metadata`
+const routingMetadataColumns = `id,spec,version,token,disabled,created_at,updated_at,last_built_at,last_error,node_count,rule_revision,requests,'{}' AS outputs,usage_header,warnings,last_attempt_at,build_metadata`
 
 type routingScanner interface{ Scan(...any) error }
 
 func (s *server) scanRoutingProfile(row routingScanner) (routingProfile, error) {
 	var p routingProfile
-	var spec, outputs, warnings string
-	err := row.Scan(&p.ID, &spec, &p.Version, &p.Token, &p.Disabled, &p.CreatedAt, &p.UpdatedAt, &p.LastBuiltAt, &p.LastError, &p.NodeCount, &p.RuleRevision, &p.Requests, &outputs, &p.UsageHeader, &warnings, &p.LastAttemptAt)
+	var spec, outputs, warnings, metadata string
+	err := row.Scan(&p.ID, &spec, &p.Version, &p.Token, &p.Disabled, &p.CreatedAt, &p.UpdatedAt, &p.LastBuiltAt, &p.LastError, &p.NodeCount, &p.RuleRevision, &p.Requests, &outputs, &p.UsageHeader, &warnings, &p.LastAttemptAt, &metadata)
 	if err != nil {
 		return p, err
 	}
 	if json.Unmarshal([]byte(spec), &p.Spec) != nil || json.Unmarshal([]byte(outputs), &p.Outputs) != nil || json.Unmarshal([]byte(warnings), &p.Warnings) != nil {
 		return p, errors.New("分流方案数据损坏")
+	}
+	if json.Unmarshal([]byte(metadata), &p.routingBuildMetadata) != nil {
+		return p, errors.New("分流生成元信息损坏")
+	}
+	if p.RuleDelivery.Mode == "" {
+		p.RuleDelivery = routingEffectiveDelivery(p.Spec)
+		p.RuleLibrary = "metacubex"
+		p.GeneratedAt = p.LastBuiltAt
+		p.RuleResources = []routingProviderPreview{}
 	}
 	p.Links = make(map[string]string, len(p.Spec.Clients))
 	for _, client := range p.Spec.Clients {
@@ -162,6 +180,9 @@ func routingBuildJSON(spec routingProfileSpec, build routingBuildResult) (string
 			return "", "", "", fmt.Errorf("%s 配置尚未生成", client)
 		}
 	}
+	if _, err := routingBuildMetadataJSON(spec, build); err != nil {
+		return "", "", "", err
+	}
 	a, err := json.Marshal(spec)
 	if err != nil {
 		return "", "", "", err
@@ -174,8 +195,48 @@ func routingBuildJSON(spec routingProfileSpec, build routingBuildResult) (string
 	return string(a), string(b), string(c), err
 }
 
+func routingBuildMetadataJSON(spec routingProfileSpec, build routingBuildResult) (string, error) {
+	metadata := build.routingBuildMetadata
+	delivery := routingEffectiveDelivery(spec)
+	if delivery.Mode == "provider" {
+		if metadata.RuleDelivery != delivery || metadata.RuleLibrary != "metacubex" || !routingRevisionPattern.MatchString(build.Revision) || len(metadata.RuleResources) != len(spec.Rules) {
+			return "", errors.New("规则集合生成元信息与方案不一致")
+		}
+		ids := map[string]bool{}
+		for _, rule := range spec.Rules {
+			ids[rule.ID] = true
+		}
+		for _, resource := range metadata.RuleResources {
+			if !ids[resource.ID] || resource.Revision != build.Revision || resource.Bytes <= 0 || resource.Count <= 0 || !routingHashPattern.MatchString(resource.SHA256) {
+				return "", errors.New("规则集合元信息缺失或版本不一致")
+			}
+			delete(ids, resource.ID)
+			address := resource.LocalURL
+			if delivery.Source == "upstream" {
+				address = resource.SourceURL
+			}
+			if resource.URL != address || address == "" {
+				return "", errors.New("规则集合下载来源与方案不一致")
+			}
+		}
+	} else if metadata.RuleDelivery.Mode == "" {
+		metadata.RuleDelivery = delivery
+		metadata.RuleLibrary = "metacubex"
+		metadata.RuleResources = []routingProviderPreview{}
+	}
+	if metadata.GeneratedAt == "" {
+		metadata.GeneratedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	content, err := json.Marshal(metadata)
+	return string(content), err
+}
+
 func (s *server) createRoutingProfile(spec routingProfileSpec, build routingBuildResult) (routingProfile, error) {
 	a, b, c, err := routingBuildJSON(spec, build)
+	if err != nil {
+		return routingProfile{}, err
+	}
+	metadata, err := routingBuildMetadataJSON(spec, build)
 	if err != nil {
 		return routingProfile{}, err
 	}
@@ -197,7 +258,7 @@ func (s *server) createRoutingProfile(spec routingProfileSpec, build routingBuil
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = tx.Exec(`INSERT INTO profiles(id,spec,token,created_at,updated_at,last_built_at,node_count,rule_revision,outputs,usage_header,warnings) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, id, a, token, now, now, now, build.NodeCount, build.Revision, b, build.UsageHeader, c)
+	_, err = tx.Exec(`INSERT INTO profiles(id,spec,token,created_at,updated_at,last_built_at,node_count,rule_revision,outputs,usage_header,warnings,build_metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, a, token, now, now, now, build.NodeCount, build.Revision, b, build.UsageHeader, c, metadata)
 	if err != nil {
 		return routingProfile{}, err
 	}
@@ -218,6 +279,10 @@ func (s *server) updateRoutingProfile(id string, version int, spec routingProfil
 	if err != nil {
 		return routingProfile{}, err
 	}
+	metadata, err := routingBuildMetadataJSON(spec, build)
+	if err != nil {
+		return routingProfile{}, err
+	}
 	db, err := s.routingDatabase()
 	if err != nil {
 		return routingProfile{}, err
@@ -228,7 +293,7 @@ func (s *server) updateRoutingProfile(id string, version int, spec routingProfil
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := tx.Exec(`UPDATE profiles SET spec=?,version=version+1,updated_at=?,last_built_at=?,last_error='',node_count=?,rule_revision=?,outputs=?,usage_header=?,warnings=? WHERE id=? AND version=?`, a, now, now, build.NodeCount, build.Revision, b, build.UsageHeader, c, id, version)
+	r, err := tx.Exec(`UPDATE profiles SET spec=?,version=version+1,updated_at=?,last_built_at=?,last_error='',node_count=?,rule_revision=?,outputs=?,usage_header=?,warnings=?,build_metadata=? WHERE id=? AND version=?`, a, now, now, build.NodeCount, build.Revision, b, build.UsageHeader, c, metadata, id, version)
 	if err != nil {
 		return routingProfile{}, err
 	}

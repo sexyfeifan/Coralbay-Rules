@@ -1,6 +1,6 @@
 # CoralBay Rules 搭建与维护指南
 
-本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定到 `4.12.0` 等已发布版本。
+本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定版本。下文以 `4.13.0` 为例，固定版本安装前请确认对应镜像已发布。
 
 使用公开镜像安装不需要 Fork 仓库、配置 GitHub Actions Secrets，也不需要安装 PPanel。PPanel、Nginx 或 OpenResty 只是可以使用的 HTTPS 反向代理方式。
 
@@ -45,7 +45,7 @@ sudo docker info
 )
 ```
 
-### 固定安装 4.12.0
+### 固定安装 4.13.0
 
 使用下面这一组命令替代上面的安装命令，不需要执行两遍：
 
@@ -59,7 +59,7 @@ sudo docker info
     -o "$coralbay_installer"
   test -s "$coralbay_installer"
   bash -n "$coralbay_installer"
-  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.12.0 \
+  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.13.0 \
     bash "$coralbay_installer" install
 )
 ```
@@ -133,8 +133,8 @@ curl -fsSI --connect-timeout 10 --max-time 30 "https://${coralbay_domain}/mihomo
 
 1. 在“运行概览”查看程序版本、666OS 同步状态及规则完整度。
 2. 在“普通订阅转换”转换已有订阅；其远程 `.ini` 配置预设仍位于普通转换页。
-3. 使用自定义分流时，先打开“MetaCubeX 分流源”，检查目录和缓存，必要时执行同步；再到 `/routing` 创建方案、预览并保存固定订阅地址。
-4. 将生成的地址导入目标客户端，实际验证连接、规则命中和订阅更新。Mihomo/OpenClash 与 Stash 的完整分流输出范围及协议边界见 [4.12.0 发布说明](../RELEASE-4.12.0.md)。
+3. 使用自定义分流时，先打开“MetaCubeX 分流源”，确认本地原始规则达到 78 / 78（首次启动自动同步，也可手动同步）；再到 `/routing` 创建方案、选择本机或上游来源、预览并保存固定订阅地址。
+4. 将生成的地址导入目标客户端，实际验证连接、规则命中和订阅更新。Mihomo/OpenClash 与 Stash 的完整分流输出范围及协议边界见 [4.13.0 发布说明](../RELEASE-4.13.0.md)。
 
 管理 API 需要登录。匿名访问 `/api/routing/catalog` 等接口返回 401 是正常行为。
 
@@ -159,16 +159,16 @@ sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
 ```
 
 ```bash
-# 固定到 4.12.0。
+# 固定到 4.13.0。
 sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
-  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.12.0 rules update
+  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.13.0 rules update
 ```
 
 `CORALBAY_IMAGE` 也支持已核实的镜像摘要地址。固定应用版本不等于固定整个 Compose 中其他服务的版本；应保留升级前的配置和镜像信息。
 
 已有安装不要用 `install` 代替日常升级。`install` 用于首次安装或有意重新配置域名、端口、同步周期；重新配置会覆盖之前在网页中保存的 666OS 同步周期。若旧安装缺少 `rules` 快捷命令，可按前面的临时文件下载流程取得脚本，将执行的子命令改为 `update`，并用 `CORALBAY_INSTALL_DIR` 指定已有安装目录。
 
-应用或生成器版本变化后，666OS 会重新生成对应版本的产物；不要把这一过程与 MetaCubeX 的独立同步混为一谈。升级后重新检查容器、控制台版本和已有订阅。
+应用或生成器版本变化后，666OS 会重新生成对应版本的产物；不要把这一过程与 MetaCubeX 的独立同步混为一谈。升级后重新检查容器、控制台版本和已有订阅。4.13.0 首次启动会补齐 MetaCubeX 原始 YAML，并为 666OS 保存独立固定资源；旧分流方案保持内嵌，只有主动编辑来源后才改变交付方式。
 
 ### 配置回退不等于服务回退
 
@@ -283,3 +283,13 @@ BASH
 | 升级启动检查失败 | 查看 `rules logs`；脚本可能已恢复配置，但不会自动退回旧镜像。先保留备份，再按实际错误排查。 |
 
 维护者自行发布镜像时，才需要在仓库配置 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`。当前 Docker 工作流使用 `v*` 标签或手动触发，并要求发布标签匹配 Dockerfile 版本；Fork 仓库还需修改镜像命名空间。安装官方公开镜像不需要进行这些操作。
+
+## 规则来源与本地存储
+
+在两个规则资源页使用“检查上游”查看新版本，用“同步到本地”更新本机副本。详情中的上游读取使用独立缓存，不改变已发布资源；本机模式生成时不临时联网补规则。
+
+新分流方案默认通过 CoralBay 的固定版本 URL 下载规则，可改为同一提交的上游 URL。上游模式要求客户端能访问 GitHub 原始文件；换来源后应在客户端更新订阅。旧方案保持兼容，可通过预览后保存主动升级，原分流链接不变。
+
+固定资源存储在 `data/rule-resources/666os/` 和 `data/routing/rules/releases/`。这两处不会被旧 666OS 的三版本清理删除；当前没有自动清理已交付版本。需要监控安装目录的可用空间，并按前文备份整个 `data/`。手动删除历史资源可能令尚未更新订阅的客户端无法下载对应规则。
+
+普通转换预设中的“配置文件来源”不代表它引用的全部规则已经镜像。详情会列出本机、外部、缺失与未知依赖；只有本项目生成的派生文件目前仍由本机交付。

@@ -90,6 +90,20 @@ func validateRoutingSpec(spec *routingProfileSpec) error {
 	if spec == nil {
 		return fmt.Errorf("缺少分流方案")
 	}
+	if d := spec.RuleDelivery; d != nil {
+		switch d.Mode {
+		case "inline":
+			if d.Source != "" {
+				return fmt.Errorf("内嵌规则没有客户端下载来源，请移除 source")
+			}
+		case "provider":
+			if d.Source != "local" && d.Source != "upstream" {
+				return fmt.Errorf("规则集合来源须为 local 或 upstream")
+			}
+		default:
+			return fmt.Errorf("规则交付方式须为 inline 或 provider")
+		}
+	}
 	spec.Name = strings.TrimSpace(spec.Name)
 	if spec.Name == "" || utf8.RuneCountInString(spec.Name) > 80 || routingHasControl(spec.Name) {
 		return fmt.Errorf("方案名称须为 1–80 个字符，不能含控制字符")
@@ -279,6 +293,8 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 	if err := validateRoutingSpec(&spec); err != nil {
 		return result, err
 	}
+	delivery := routingEffectiveDelivery(spec)
+	result.routingBuildMetadata = routingBuildMetadata{RuleDelivery: delivery, RuleLibrary: "metacubex", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), RuleResources: []routingProviderPreview{}, ExternalDependencies: []string{"重新生成节点时仍需访问原始节点订阅；DNS 与连通性测试使用配置中列出的服务。"}}
 	client := s.routingHTTPClient
 	if client == nil {
 		client = safeHTTPClient(30 * time.Second)
@@ -430,7 +446,13 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 		ids = append(ids, choice.ID)
 	}
 	result.RuleOrder = append([]string(nil), ids...)
-	snapshot, err := s.loadRoutingRuleSnapshot(ctx, ids, false)
+	var snapshot routingRuleSnapshot
+	var err error
+	if delivery.Mode == "provider" {
+		snapshot, err = s.loadPublishedRoutingRuleSnapshot(ctx, ids)
+	} else {
+		snapshot, err = s.loadRoutingRuleSnapshot(ctx, ids, false)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -439,6 +461,7 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 		result.Warnings = append(result.Warnings, "规则版本检查 / 同步警告："+snapshot.LastError)
 	}
 	compiled := []string{}
+	providers := map[string]routingProviderPreview{}
 	for _, choice := range choices {
 		policy := strings.ToUpper(choice.Action)
 		if choice.Action == "proxy" {
@@ -458,6 +481,28 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 		lines := snapshot.Rules[choice.ID]
 		if len(lines) == 0 {
 			return result, fmt.Errorf("规则 %s 的快照为空", choice.ID)
+		}
+		if delivery.Mode == "provider" {
+			resource, ok := snapshot.Resources[choice.ID]
+			if !ok || resource.Revision != snapshot.Revision || len(resource.Content) == 0 || routingSHA256(resource.Content) != resource.SHA256 {
+				return result, fmt.Errorf("规则 %s 缺少已校验的本地原始文件，请先同步本地资源", choice.ID)
+			}
+			if resource.Format != "yaml" || resource.Behavior != "classical" && resource.Behavior != "ipcidr" {
+				return result, fmt.Errorf("规则 %s 的原始集合格式不受支持", choice.ID)
+			}
+			address := resource.LocalURL
+			if delivery.Source == "upstream" {
+				address = resource.SourceURL
+			}
+			entry := routingProviderPreview{ID: choice.ID, Revision: resource.Revision, Behavior: resource.Behavior, Format: resource.Format, URL: address, SourceURL: resource.SourceURL, LocalURL: resource.LocalURL, SHA256: resource.SHA256, Bytes: resource.Bytes, Count: resource.Count}
+			providers[choice.ID] = entry
+			result.RuleResources = append(result.RuleResources, entry)
+			rule := "RULE-SET," + routingProviderName(choice.ID) + "," + policy
+			if resource.Behavior == "ipcidr" {
+				rule += ",no-resolve"
+			}
+			compiled = append(compiled, rule)
+			continue
 		}
 		for _, line := range lines {
 			rule, err := routingCompileRule(line, policy)
@@ -490,24 +535,45 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 	}
 	result.NodeCount = len(exported)
 	for _, target := range spec.Clients {
-		output, err := routingRender(target, exported, result.Groups, compiled)
+		output, err := routingRender(target, exported, result.Groups, compiled, providers)
 		if err != nil {
 			return result, err
 		}
 		result.Outputs[target] = output
 	}
-	validated, err := routingCoreValidate(ctx, result.Outputs)
+	validated, err := routingCoreValidate(ctx, result.Outputs, snapshot.Resources)
 	if err != nil {
 		return result, err
 	}
 	if !validated {
 		result.Warnings = append(result.Warnings, "当前运行环境未安装校验内核，本次完成结构校验；正式镜像会额外执行内核语法检查。")
 	}
+	if delivery.Mode == "provider" {
+		if delivery.Source == "upstream" {
+			result.ExternalDependencies = append(result.ExternalDependencies, "客户端从 raw.githubusercontent.com 的固定提交下载规则集合。")
+		} else {
+			result.Warnings = append(result.Warnings, "本机规则使用已发布原始副本；本次构建不检查或请求规则上游。客户端仍需访问 CoralBay 下载集合。")
+		}
+		for _, target := range spec.Clients {
+			if target == "stash" {
+				result.Warnings = append(result.Warnings, "Stash 集合按官方 classical/ipcidr YAML 语法生成，已核对原始条目与引用；Stash 原生加载数量和实际命中仍需在客户端验证，Mihomo 校验不代表 Stash 运行验收。")
+			}
+		}
+	}
 	result.Warnings = append(result.Warnings, "已验证配置结构、引用和支持范围；请使用新版 Mihomo 内核或 Stash，并在客户端验证实际连接与规则命中。")
 	return result, nil
 }
 
-func routingCoreValidate(ctx context.Context, outputs map[string]string) (bool, error) {
+func routingEffectiveDelivery(spec routingProfileSpec) routingRuleDelivery {
+	if spec.RuleDelivery == nil {
+		return routingRuleDelivery{Mode: "inline"}
+	}
+	return *spec.RuleDelivery
+}
+
+func routingProviderName(id string) string { return "cb-" + id }
+
+func routingCoreValidate(ctx context.Context, outputs map[string]string, resourceSets ...map[string]routingRuleResource) (bool, error) {
 	const binary = "/usr/local/bin/coralbay-probe-core"
 	if _, err := os.Stat(binary); os.IsNotExist(err) {
 		return false, nil
@@ -520,6 +586,10 @@ func routingCoreValidate(ctx context.Context, outputs map[string]string) (bool, 
 	}
 	defer os.RemoveAll(dir)
 	checked := map[[32]byte]bool{}
+	resources := map[string]routingRuleResource{}
+	if len(resourceSets) > 0 && resourceSets[0] != nil {
+		resources = resourceSets[0]
+	}
 	for _, target := range []string{"mihomo", "openclash", "stash"} {
 		output, ok := outputs[target]
 		if !ok {
@@ -530,7 +600,11 @@ func routingCoreValidate(ctx context.Context, outputs map[string]string) (bool, 
 			continue
 		}
 		file := filepath.Join(dir, "config.yaml")
-		if err := os.WriteFile(file, []byte(output), 0600); err != nil {
+		candidate, providers, err := routingLocalValidationConfig(output, resources, dir)
+		if err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(file, candidate, 0600); err != nil {
 			return false, fmt.Errorf("无法写入待校验配置")
 		}
 		runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -542,6 +616,11 @@ func routingCoreValidate(ctx context.Context, outputs map[string]string) (bool, 
 		cancel()
 		if err != nil {
 			return false, fmt.Errorf("%s 的内核配置校验未通过，请检查节点协议、密钥和传输参数；未发布候选配置", target)
+		}
+		if len(providers) > 0 {
+			if err := routingVerifyLoadedProviders(ctx, binary, dir, providers, resources); err != nil {
+				return false, err
+			}
 		}
 		checked[digest] = true
 	}
@@ -631,7 +710,7 @@ func routingInlineRegex(expression string) (string, error) {
 	return result, nil
 }
 
-func routingRender(target string, nodes []map[string]any, groups []routingGroupPreview, rules []string) (string, error) {
+func routingRender(target string, nodes []map[string]any, groups []routingGroupPreview, rules []string, providerSets ...map[string]routingProviderPreview) (string, error) {
 	proxies := make([]map[string]any, 0, len(nodes))
 	for _, node := range nodes {
 		copy := map[string]any{}
@@ -668,6 +747,17 @@ func routingRender(target string, nodes []map[string]any, groups []routingGroupP
 	}
 	cfg := map[string]any{"mode": "rule", "log-level": "info", "ipv6": true, "proxies": proxies, "proxy-groups": proxyGroups, "rules": rules,
 		"dns": map[string]any{"enable": true, "ipv6": true, "nameserver": []string{"https://dns.alidns.com/dns-query", "https://1.1.1.1/dns-query"}, "default-nameserver": []string{"223.5.5.5", "1.1.1.1"}}}
+	if len(providerSets) > 0 && len(providerSets[0]) > 0 {
+		providerConfig := map[string]any{}
+		for id, resource := range providerSets[0] {
+			entry := map[string]any{"behavior": resource.Behavior, "format": "yaml", "url": resource.URL, "path": "./rules/metacubex/" + resource.Revision + "/" + id + ".yaml", "interval": 86400}
+			if target != "stash" {
+				entry["type"] = "http"
+			}
+			providerConfig[routingProviderName(id)] = entry
+		}
+		cfg["rule-providers"] = providerConfig
+	}
 	if target != "stash" {
 		cfg["mixed-port"] = 7890
 		cfg["allow-lan"] = false

@@ -304,6 +304,14 @@ func TestRoutingRuleHandlers(t *testing.T) {
 	if catalog.Code != 200 || json.Unmarshal(catalog.Body.Bytes(), &initial) != nil || len(initial.Rules) != 78 || len(fixture.requests) != 0 {
 		t.Fatalf("catalog fetches network or has incorrect JSON: %s", catalog.Body.String())
 	}
+	missing := httptest.NewRecorder()
+	s.routingRuleDetailsHandler(missing, httptest.NewRequest(http.MethodGet, "/api/routing/rules/details?id=openai", nil))
+	if missing.Code != http.StatusNotFound || len(fixture.requests) != 0 {
+		t.Fatalf("local details must not initialize rules from the network: status=%d requests=%v", missing.Code, fixture.requests)
+	}
+	if _, err := s.syncRoutingRules(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	details := httptest.NewRecorder()
 	s.routingRuleDetailsHandler(details, httptest.NewRequest(http.MethodGet, "/api/routing/rules/details?id=openai&limit=1", nil))
 	var preview struct {

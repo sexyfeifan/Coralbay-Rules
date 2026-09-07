@@ -1,3 +1,4 @@
+const coralbayAssetVersion=new URL(document.currentScript?.src||location.href).searchParams.get('v')||'4.13.0';
 const $ = id => document.getElementById(id);
 let usagePage=1;
 async function json(url, opt = {}) { const response = await fetch(url, {...opt, cache:'no-store'}); const data = await response.json().catch(() => ({})); if (response.status===401){location.replace('/');throw new Error('登录已失效')} if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); return data; }
@@ -20,13 +21,13 @@ function ensureLegacyData(){if(!legacyUIReady||legacyDataStarted)return;legacyDa
 function consoleNotice(message){const toast=$('consoleToast');if(!toast)return;toast.textContent=message;toast.classList.remove('hidden');clearTimeout(consoleToastTimer);consoleToastTimer=setTimeout(()=>toast.classList.add('hidden'),6500)}
 function setNavigationOpen(open){const wasOpen=$('consoleNavigation').classList.contains('open');$('consoleNavigation').classList.toggle('open',open);$('navBackdrop').classList.toggle('hidden',!open);$('navToggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('nav-open',open);if(open)$('navClose').focus();else if(wasOpen)$('navToggle').focus()}
 function currentConsolePage(){return location.pathname.replace(/\/$/,'')==='/routing'?(location.hash==='#sources'?'sources':'routing'):location.hash.slice(1)}
-async function loadRoutingModule(view){try{if(!routingModulePromise)routingModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/routing.js?v=routing-v1';script.onload=()=>resolve(window.CoralBayRouting);script.onerror=()=>{script.remove();routingModulePromise=null;reject(new Error('分流页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await routingModulePromise;await module.activate(view)}catch(error){consoleNotice(error.message)}}
+async function loadRoutingModule(view){try{if(!routingModulePromise)routingModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/routing.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayRouting);script.onerror=()=>{script.remove();routingModulePromise=null;reject(new Error('分流页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await routingModulePromise;await module.activate(view)}catch(error){consoleNotice(error.message)}}
 function prepareTabs() {
   const groups = {
     overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
     templates: ['#templates'],
     overwrite: ['#overwritePanel'],
-    rules: ['#nativeRules', '#ruleSection', '#detailPanel'],
+    rules: ['#nativeRules', '#ruleSection'],
     subscription: ['#subscriptionConverter'],
     activity: ['#activity']
   };
@@ -60,26 +61,102 @@ async function publicStatus() {
   catch { setState('state','异常',false); }
 }
 
-let detailItems = [], detailPath = '', detailName = '', detailTimer;
-async function showRuleDetails(path, name, query = '') {
-  try {
-    activateTab('rules');
-    detailPath=path; detailName=name; const data = await json(`/api/public/rule-details?path=${encodeURIComponent(path)}&q=${encodeURIComponent(query)}&page_size=500`);
-    detailItems = data.entries || []; $('detailTitle').textContent = `${name} 规则详情`;
-    $('detailMeta').textContent = `${data.count} 条匹配 · 当前显示 ${detailItems.length} 条 · ${data.source_path}`; if(!query)$('detailSearch').value = '';
-    $('detailEntries').textContent = detailItems.join('\n'); $('detailPanel').classList.remove('hidden');
-    $('detailPanel').scrollIntoView({behavior:'smooth'});
-  } catch (error) { $('message').textContent = error.message; }
+function resourceURL(raw){if(!raw)return '';try{const url=new URL(raw,location.origin);return ['http:','https:'].includes(url.protocol)?url.href:''}catch{return ''}}
+function resourceDate(value){return value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'尚未记录'}
+function resourceLink(url,label){const safe=resourceURL(url);return safe?`<a href="${escapeHTML(safe)}" target="_blank" rel="noopener noreferrer">${escapeHTML(label)}</a>`:'<span class="muted">暂无链接</span>'}
+// Shared inspector is lazy: opening local content never asks for upstream state.
+window.CoralBayResourceDrawer=(()=>{
+  let dialog,config,source='local',page=1,request=0,timer,busy=false,snapshots={},opener;
+  const pageSize=200;
+  function mount(){
+    if(dialog)return;
+    dialog=document.createElement('dialog');dialog.id='resourceDrawer';dialog.className='resource-drawer';dialog.setAttribute('aria-labelledby','resourceTitle');
+    dialog.innerHTML=`<div class="resource-drawer-head"><div><span id="resourceLibrary" class="eyebrow"></span><h2 id="resourceTitle"></h2></div><button id="resourceClose" class="ghost" aria-label="关闭资源详情" type="button">×</button></div><div class="resource-drawer-body"><div class="local-tabs resource-tabs" role="group" aria-label="详情来源"><button type="button" data-resource-tab="local">本地镜像</button><button type="button" data-resource-tab="upstream">上游原版</button><button type="button" data-resource-tab="diff">差异摘要</button></div><p id="resourceScope" class="field-hint"></p><div id="resourceStatus" class="routing-feedback" role="status" aria-live="polite"></div><dl id="resourceMeta" class="resource-meta"></dl><div id="resourceLinks" class="resource-links"></div><div id="resourceSearchRow" class="resource-search-row"><input id="resourceSearch" aria-label="搜索资源条目" placeholder="搜索域名、IP 或规则文本"><button id="resourceReload" type="button" class="secondary">重新读取</button></div><p id="resourceCount" class="field-hint"></p><pre id="resourceEntries" class="resource-entries"></pre><div id="resourcePagination" class="resource-pagination"><button id="resourcePrev" type="button" class="secondary">上一页</button><span id="resourcePage" class="field-hint"></span><button id="resourceNext" type="button" class="secondary">下一页</button></div><div id="resourceCreateRow" class="resource-create-row hidden"><button id="resourceCreate" type="button">用此规则新建分流方案</button><p class="field-hint">会新建草稿；订阅地址与保存仍需你填写确认。</p></div></div>`;
+    document.body.append(dialog);
+    $('resourceClose').onclick=()=>dialog.close();
+    dialog.addEventListener('close',()=>{request++;clearTimeout(timer);opener?.focus()});
+    dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close()});
+    dialog.querySelectorAll('[data-resource-tab]').forEach(button=>button.onclick=()=>{source=button.dataset.resourceTab;page=1;$('resourceSearch').value='';clearTimeout(timer);load()});
+    $('resourceSearch').oninput=()=>{clearTimeout(timer);request++;busy=true;page=1;$('resourcePrev').disabled=true;$('resourceNext').disabled=true;timer=setTimeout(load,300)};
+    $('resourceReload').onclick=load;
+    $('resourcePrev').onclick=()=>{if(!busy&&page>1){page--;load()}};
+    $('resourceNext').onclick=()=>{if(!busy){page++;load()}};
+    $('resourceCreate').onclick=async()=>{const create=config.create,chosen=source==='upstream'?'upstream':'local';dialog.close();await create(chosen)};
+  }
+  function metaRow(label,value){return `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value??'—')}</dd></div>`}
+  function renderLinks(data){
+    const active=source==='local'?(data.local_url||data.url):(data.url||data.source_url);
+    const links=[['当前来源文件',active],['本机固定文件',data.local_url],[data.content_kind==='associated_geo'?'关联 geo 可读源':'上游文件',data.source_url]];
+    const used=new Set();$('resourceLinks').innerHTML=links.filter(([,url])=>{const safe=resourceURL(url);if(!safe||used.has(safe))return false;used.add(safe);return true}).map(([label,url])=>`<div><span>${escapeHTML(label)}</span>${resourceLink(url,'打开 / 下载')}<button type="button" class="link-button" data-resource-copy="${escapeHTML(resourceURL(url))}">复制 URL</button><code>${escapeHTML(resourceURL(url))}</code></div>`).join('');
+    $('resourceLinks').querySelectorAll('[data-resource-copy]').forEach(button=>button.onclick=async()=>{try{await navigator.clipboard.writeText(button.dataset.resourceCopy);consoleNotice('资源 URL 已复制')}catch{consoleNotice('剪贴板不可用，请手动复制下方 URL。')}});
+  }
+  function renderComparison(){
+    const local=snapshots.local,upstream=snapshots.upstream;
+    $('resourceMeta').innerHTML=metaRow('本地版本',local?.revision||'尚未读取')+metaRow('上游版本',upstream?.revision||'尚未读取')+metaRow('本地 SHA-256',local?.sha256||'—')+metaRow('上游 SHA-256',upstream?.sha256||'—');
+    $('resourceStatus').textContent=!local||!upstream?'先分别打开本地镜像与上游原版，再比较已读取的版本。':local.sha256&&upstream.sha256?(local.sha256===upstream.sha256?'已读取文件的 SHA-256 相同。':'已读取文件的 SHA-256 不同。'):'当前元数据不足以判断文件内容是否相同。';
+    $('resourceScope').textContent='此处比较已明确读取的文件元数据；不表示所有规则条目相同，也不会自动检查上游。';
+    $('resourceCount').textContent='条目级新增与删除比较尚未提供。';
+    $('resourceEntries').textContent='';$('resourceLinks').replaceChildren();$('resourcePagination').classList.add('hidden');$('resourceSearchRow').classList.add('hidden');
+  }
+  async function load(){
+    const id=++request;busy=true;
+    dialog.querySelectorAll('[data-resource-tab]').forEach(button=>{const active=button.dataset.resourceTab===source;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active))});
+    $('resourceStatus').classList.remove('bad');$('resourceStatus').textContent=source==='local'?'正在读取本地已发布内容…':source==='upstream'?'正在读取上游内容；不会发布到本地…':'正在比较规则内容…';
+    $('resourceScope').textContent=source==='local'?'只读取本机已有文件，不触发上游检查或同步。':source==='upstream'?'上游预览独立于本地发布；读取成功不会改变已发布版本。':'按当前明确记录的本地与上游版本比较。';
+    $('resourceMeta').replaceChildren();$('resourceLinks').replaceChildren();$('resourceEntries').textContent='';$('resourceCount').textContent='';
+    $('resourcePrev').disabled=true;$('resourceNext').disabled=true;$('resourceReload').disabled=true;
+    $('resourcePagination').classList.remove('hidden');$('resourceSearchRow').classList.remove('hidden');
+    $('resourceCreateRow').classList.toggle('hidden',!config.create||source==='diff');
+    if(source==='diff'&&!config.serverDiff){renderComparison();busy=false;$('resourceReload').disabled=false;return}
+    try{
+      const data=await config.load({source,q:$('resourceSearch').value.trim(),page:String(page),page_size:String(pageSize)});
+      if(id!==request||!dialog.open)return;
+      if(source!=='diff')snapshots[source]=data;
+      const entries=Array.isArray(data.entries)?data.entries:[];
+      const matching=Number(data.count??data.total??entries.length),total=Number(data.total_count??matching),actualPage=Number(data.page||page),limit=Number(data.page_size||pageSize),pages=Math.max(1,Math.ceil(matching/limit));
+      const note=[data.note,data.local_error&&'本地原始文件不可用：'+data.local_error,data.last_error&&'本次检查失败，显示已有缓存：'+data.last_error].filter(Boolean).join('；')||(data.readable===false?'该资源仅提供元数据；不会把二进制文件或关联文件伪装成可读原文。':'');
+      $('resourceStatus').textContent=note||'读取完成';
+      $('resourceMeta').innerHTML=metaRow('来源',source==='local'?'本机已发布':source==='upstream'?'上游预览':'版本差异')+metaRow(source==='diff'?'本地版本':'版本',source==='diff'?data.local_revision||'—':data.revision||'—')+(data.geo_revision?metaRow('关联 geo 版本',data.geo_revision):'')+(source==='diff'?metaRow('上游版本',data.upstream_revision)+metaRow('原始文件校验',typeof data.same==='boolean'?(data.same?'SHA-256 相同':'SHA-256 不同'):'缺少可比文件'):metaRow(source==='local'?'本地原始文件':'上游文件状态',source==='local'&&data.mirrored===false?'未镜像（仅兼容缓存）':data.cached===false?(source==='local'?'本地缺失':'尚未获取'):'可用'))+metaRow('格式 / 行为',[data.format,data.behavior].filter(Boolean).join(' / ')||'—')+metaRow('文件大小',size(data.bytes))+metaRow('SHA-256',data.sha256||'—')+metaRow(source==='local'?'本地更新时间':'上游预览缓存时间',resourceDate(data.updated_at))+metaRow('最近检查',resourceDate(data.checked_at));
+      if(data.content_kind==='associated_geo')$('resourceScope').textContent+=' 下方为关联 geo 可读条目，并非 MRS 二进制文件的反向解析；两者版本分别显示。';
+      renderLinks(data);
+      const start=matching?(actualPage-1)*limit+1:0,end=matching?Math.min(start+entries.length-1,matching):0;
+      $('resourceCount').textContent=source==='diff'?`新增 ${data.comparable===false?'—':data.added_count??'—'} · 删除 ${data.comparable===false?'—':data.removed_count??'—'} · 当前 ${start}–${end} / ${matching} 条`:`匹配 ${matching.toLocaleString()} / 全部 ${total.toLocaleString()} 条 · 当前 ${start}–${end} 条${data.truncated?' · 本页仅展示部分条目，可继续翻页':''}`;
+      $('resourceEntries').textContent=entries.join('\n')||(data.readable===false?'当前格式无可读条目。':source==='diff'?(data.comparable===false||data.readable===false||data.added_count===undefined?'没有足够的关联可读内容可比较，请查看元数据与说明。':'当前关联可读条目没有差异。'):'没有匹配条目。');
+      $('resourcePage').textContent=`第 ${actualPage} / ${pages} 页 · 每页 ${limit} 条`;
+      $('resourcePrev').disabled=actualPage<=1;$('resourceNext').disabled=actualPage>=pages;
+      $('resourceSearchRow').classList.toggle('hidden',data.readable===false);$('resourcePagination').classList.toggle('hidden',data.readable===false);
+    }catch(error){if(id!==request)return;$('resourceStatus').textContent=`${source==='local'?'本地读取':source==='upstream'?'上游预览':'差异比较'}失败：${error.message}`;$('resourceStatus').classList.add('bad');$('resourcePage').textContent='';}
+    finally{if(id===request){busy=false;$('resourceReload').disabled=false}}
+  }
+  return{open(value){mount();config=value;snapshots={};source=value.source||'local';page=1;clearTimeout(timer);$('resourceSearch').value='';$('resourceTitle').textContent=value.name;$('resourceLibrary').textContent=value.library;opener=document.activeElement;if(!dialog.open)dialog.showModal();load()}};
+})();
+let ruleCatalog666=null;
+function showRuleDetails(path,name,source='local'){
+  window.CoralBayResourceDrawer.open({name,library:'666OS / YYDS',source,serverDiff:true,load:params=>json('/api/resources/666os/details?'+new URLSearchParams({path,...params}))});
 }
-
-async function loadRules() {
-  if (!$('ruleRows')) return;
-  try {
-    const data = await json('/api/public/rules');
-    if ($('ruleCount')) $('ruleCount').textContent = `${data.count || 0} 项资源`;
-    $('ruleRows').innerHTML = data.rules.map(rule => `<tr><td><div class="rule-name"><img src="${escapeHTML(rule.icon_url)}" alt=""><div><strong>${escapeHTML(rule.name)}</strong><br><small>${escapeHTML(rule.path)}</small></div></div></td><td>${escapeHTML(rule.behavior)}<br><small>${escapeHTML(rule.format)}</small></td><td class="${rule.cached?'ok':'bad'}">${rule.cached?'● 已缓存':'● 缺失'}</td><td>${size(rule.bytes)}</td><td><a href="${escapeHTML(rule.original_url)}" target="_blank" rel="noreferrer">原链接</a> · <a href="${escapeHTML(rule.mirror_url)}" target="_blank" rel="noreferrer">镜像</a> · <a href="${escapeHTML(rule.mirror_url)}" download>下载</a>${rule.readable?` · <button class="link-button" data-detail="${escapeHTML(rule.path)}" data-name="${escapeHTML(rule.name)}">查看条目</button>`:`<br><small class="muted">暂无公开可读源</small>`}</td></tr>`).join('');
-    document.querySelectorAll('[data-detail]').forEach(button => button.onclick = () => showRuleDetails(button.dataset.detail, button.dataset.name));
-  } catch (error) { $('ruleRows').innerHTML = `<tr><td colspan="5" class="bad">规则目录加载失败：${escapeHTML(error.message)}</td></tr>`; throw error; }
+function render666Status(data){
+  const status=data.source_status||{},upstream=status.upstream||{};
+  $('ruleSourceStatus').innerHTML=`<div><strong>本地已发布</strong><code>${escapeHTML(status.local_revision||data.local_revision||'尚未同步')}</code><small>${Number(status.local_count??data.rules?.filter(rule=>rule.cached).length??0)} / ${Number(status.total??data.count??0)} 项 · ${escapeHTML(resourceDate(status.local_updated_at))}</small></div><div><strong>上游检查</strong><code>${escapeHTML(upstream.revision||data.upstream_revision||'尚未检查')}</code><small>${escapeHTML(resourceDate(upstream.checked_at))}</small></div><div><strong>关联 geo 版本</strong><code>${escapeHTML(status.local_geo_commit||'—')}</code><small>可读条目与 release 文件分别追溯</small></div>`;
+  const errors=[data.local_error&&'本地发布失败：'+data.local_error,upstream.last_error&&'最近上游检查失败：'+upstream.last_error].filter(Boolean);$('ruleSourceFeedback').textContent=errors.join('；');$('ruleSourceFeedback').classList.toggle('bad',errors.length>0);
+}
+async function loadRules(){
+  if(!$('ruleRows'))return;
+  try{
+    const data=await json('/api/public/rules');ruleCatalog666=data;
+    $('ruleCount').textContent=`${data.count||0} 项资源`;render666Status(data);
+    $('ruleRows').innerHTML=(data.rules||[]).map(rule=>`<tr><td><div class="rule-name"><img src="${escapeHTML(resourceURL(rule.icon_url))}" alt=""><div><strong>${escapeHTML(rule.name)}</strong><br><small>${escapeHTML(rule.path)}</small></div></div></td><td>${escapeHTML(rule.behavior)}<br><small>${escapeHTML(rule.format)}</small></td><td class="${rule.cached?'ok':'warning'}">${rule.cached?'● 本地可用':'○ 待同步'}</td><td>${size(rule.bytes)}</td><td>${resourceLink(rule.local_url||rule.mirror_url,'本机文件')} · ${resourceLink(rule.original_url,'上游文件')}<br><button class="link-button" type="button" data-detail="${escapeHTML(rule.path)}" data-name="${escapeHTML(rule.name)}">本地 / 上游详情</button></td></tr>`).join('');
+    $('ruleRows').querySelectorAll('[data-detail]').forEach(button=>button.onclick=()=>showRuleDetails(button.dataset.detail,button.dataset.name));
+  }catch(error){$('ruleRows').innerHTML=`<tr><td colspan="5" class="bad">规则目录加载失败：${escapeHTML(error.message)}</td></tr>`;throw error;}
+}
+async function operate666(kind){
+  const button=$(kind==='check'?'ruleCheckUpstream':'ruleSyncLocal');button.disabled=true;
+  $('ruleSourceFeedback').classList.remove('bad');$('ruleSourceFeedback').textContent=kind==='check'?'正在检查上游版本；不会发布本地文件…':'正在启动 666OS 同步…';
+  try{
+    const result=await json(kind==='check'?'/api/resources/666os/check':'/api/admin/sync',{method:'POST'});
+    if(kind==='check'){await loadRules();const errors=[ruleCatalog666?.local_error&&'本地发布失败：'+ruleCatalog666.local_error,result.last_error&&'上游检查失败：'+result.last_error].filter(Boolean);$('ruleSourceFeedback').textContent=errors.join('；')||'上游检查完成；本地发布版本保持不变。';$('ruleSourceFeedback').classList.toggle('bad',errors.length>0)}
+    else{$('ruleSourceFeedback').textContent='666OS 同步已启动。完成后刷新状态查看已发布版本；MetaCubeX 不受此操作影响。'}
+  }catch(error){$('ruleSourceFeedback').textContent=error.message;$('ruleSourceFeedback').classList.add('bad')}
+  finally{button.disabled=false}
 }
 
 let templateItems = [];
@@ -87,8 +164,12 @@ let templatePreviewRequest = 0;
 function selectTemplate() {
   const selected = templateItems.find(item => item.id === $('clientTemplate').value); if (!selected) return;
   const original = $('templateVariant').value === 'original';
-  const templateURL = original ? selected.original_url : selected.online_url;
-  $('downloadClientTemplate').href = original ? selected.original_download_url : selected.download_url;
+  const sourceSelect=$('templateRuleSource'),available=original?[]:(selected.rule_source_options||[]),previous=sourceSelect.value;
+  sourceSelect.innerHTML='<option value="default">现有模板地址（保持兼容）</option>'+available.map(item=>`<option value="${escapeHTML(item.id)}">${item.id==='local'?'本地规则镜像':'上游固定版本'}</option>`).join('');sourceSelect.value=available.some(item=>item.id===previous)?previous:'default';sourceSelect.disabled=!available.length;
+  const ruleSource=available.find(item=>item.id===sourceSelect.value);
+  const templateURL = ruleSource?.url || (original ? selected.original_url : selected.online_url);
+  $('templateRuleSourceHint').textContent=ruleSource?`${ruleSource.description||''}${ruleSource.revision?' · 版本 '+ruleSource.revision:''}`:original?'Perfect Panel 原始版保持原样。':available.length?'可以明确选择模板内原始规则的下载来源；现有地址继续保持兼容。':['clash','mihomo','openclash','stash'].includes(selected.id)?'当前尚未发布此模板的来源变体，请先同步 666OS 规则。':selected.capability==='nodes-only'?'此输出仅包含节点，不需要规则下载来源。':'此模板没有等价的上游规则变体；使用的派生或转换资源仅由本机提供。';
+  $('downloadClientTemplate').href = ruleSource?.url || (original ? selected.original_download_url : selected.download_url);
   $('downloadClientTemplate').textContent = original ? '下载原始版' : '下载改造版';
   $('openClientTemplate').href = templateURL;
   $('openClientTemplate').textContent = original ? '打开原始版' : '打开改造版';
@@ -97,8 +178,9 @@ function selectTemplate() {
   const state = statusMap[selected.capability] || ['base','○ 官方基础'];
   const status = `<span class="template-status ${state[0]}">${state[1]}</span>`;
   const variantStatus = original ? '<span class="template-status base">○ Perfect Panel 原始版</span>' : status;
-  const variantDescription = original ? '未经 CoralBay 分流改造的 Perfect Panel 原始模板，用于对照、排错或恢复。' : selected.description;
-  $('clientTemplateHint').innerHTML = `${variantStatus}<span>${escapeHTML(variantDescription)}<br><small>${original?'节点：官方原始渲染 · 策略组与规则：保持原样':`节点：${selected.node_rendering?'可渲染':'不适用'} · 策略组：${escapeHTML(selected.policy_groups)} · 规则源：${escapeHTML(selected.rule_sources)} · ${escapeHTML(selected.validation)}`}</small></span>`;
+  const sourceLabel=ruleSource?.id==='upstream'?'上游固定版本':ruleSource?.id==='local'?'本地规则镜像':selected.rule_sources;
+  const variantDescription = original ? '未经 CoralBay 分流改造的 Perfect Panel 原始模板，用于对照、排错或恢复。' : ruleSource?`${selected.name} 模板：保留现有节点渲染、策略组和规则顺序；规则从${sourceLabel}下载。`:selected.description;
+  $('clientTemplateHint').innerHTML = `${variantStatus}<span>${escapeHTML(variantDescription)}<br><small>${original?'节点：官方原始渲染 · 策略组与规则：保持原样':`节点：${selected.node_rendering?'可渲染':'不适用'} · 策略组：${escapeHTML(selected.policy_groups)} · 规则源：${escapeHTML(sourceLabel)} · ${escapeHTML(selected.validation)}`}</small></span>`;
   $('ppanelName').textContent = selected.ppanel_name || '';
   $('ppanelUA').textContent = selected.user_agent || '';
   $('ppanelFormat').textContent = selected.output_format || '';
@@ -106,12 +188,14 @@ function selectTemplate() {
   $('ppanelTemplateURL').textContent = templateURL || '';
   const requestID = ++templatePreviewRequest;
   $('clientTemplatePreview').textContent = '正在读取模板…';
-  fetch(templateURL,{cache:'no-store'}).then(response=>{if(!response.ok)throw new Error(`HTTP ${response.status}`);return response.text()}).then(content=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=content}).catch(error=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=`模板预览失败：${error.message}`});
+  const templatePath=new URL(templateURL,location.href).pathname;
+  const previewURL=/^\/(?:_templates\/clients\/|_rule-templates\/666os\/)/.test(templatePath)?templatePath:templateURL;
+  fetch(previewURL,{cache:'no-store'}).then(response=>{if(!response.ok)throw new Error(`HTTP ${response.status}`);return response.text()}).then(content=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=content}).catch(error=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=`模板预览失败：${error.message}`});
 }
 async function loadTemplates() {
-  const data = await json('/api/public/templates'); templateItems = data.templates || [];
+  const previous=$('clientTemplate').value; const data = await json('/api/public/templates'); templateItems = data.templates || [];
   $('clientTemplate').innerHTML = templateItems.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('');
-  selectTemplate();
+  if(templateItems.some(item=>item.id===previous))$('clientTemplate').value=previous;selectTemplate();
 }
 
 let conversionItems = [];
@@ -119,7 +203,7 @@ function renderConversions() {
   if (!$('conversionRows')) return;
   const query = ($('conversionSearch').value || '').trim().toLowerCase(), kind = $('conversionKind').value;
   const items = conversionItems.filter(item => (!kind || item.kind === kind) && (!query || item.id.toLowerCase().includes(query) || item.source.toLowerCase().includes(query)));
-  $('conversionRows').innerHTML = items.map(item => `<tr class="${item.entries===0?'empty-rule':''}"><td><strong>${escapeHTML(item.id.replace(/^(site|ip)-/,''))}</strong>${item.entries===0?'<br><small class="warning">安全空占位：上游没有公开可读源</small>':''}</td><td>${item.kind==='site'?'域名':'IP/CIDR'}</td><td>${Number(item.entries).toLocaleString()}</td><td><code>${escapeHTML(item.source)}</code></td><td><a href="${escapeHTML(item.list_url)}" target="_blank" rel="noreferrer">RULE-SET</a> · <a href="${escapeHTML(item.singbox_url)}" target="_blank" rel="noreferrer">sing-box JSON</a> · <button class="link-button" data-copy-url="${escapeHTML(item.list_url)}">复制链接</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">没有匹配的转换产物</td></tr>';
+  $('conversionRows').innerHTML = items.map(item => `<tr class="${item.entries===0?'empty-rule':''}"><td><strong>${escapeHTML(item.id.replace(/^(site|ip)-/,''))}</strong>${item.entries===0?'<br><small class="warning">无公开可读源 · 当前零覆盖</small>':''}</td><td>${item.kind==='site'?'域名':'IP/CIDR'}</td><td>${Number(item.entries).toLocaleString()}</td><td><code>${escapeHTML(item.source)}</code></td><td><a href="${escapeHTML(item.list_url)}" target="_blank" rel="noreferrer">RULE-SET</a> · <a href="${escapeHTML(item.singbox_url)}" target="_blank" rel="noreferrer">sing-box JSON</a> · <button class="link-button" data-copy-url="${escapeHTML(item.list_url)}">复制链接</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">没有匹配的转换产物</td></tr>';
   document.querySelectorAll('[data-copy-url]').forEach(button=>button.onclick=async()=>{await navigator.clipboard.writeText(button.dataset.copyUrl);$('message').textContent='转换产物链接已复制'});
 }
 async function loadConversions() {
@@ -153,7 +237,8 @@ function updateSubCompatibility(){const target=$('subTarget').value,[state,text]
 async function loadSubconverterStatus(){try{const data=await json('/api/admin/subconverter/status');$('subBackendState').textContent=data.ok?`本机后端 · ${data.version}`:'后端异常';$('subBackendState').classList.toggle('bad',!data.ok)}catch(error){$('subBackendState').textContent='后端不可用';$('subBackendState').classList.add('bad')}}
 
 let subscriptionPresets=[];
-function applySubscriptionPreset(){const preset=subscriptionPresets.find(item=>item.id===$('subPreset').value);if(!preset)return;if(preset.built_in){$('subPresetSource').value='local';$('subPresetSource').disabled=true;$('subConfig').value=preset.local_url;$('subPresetDetail').innerHTML='<span class="template-status adapted">● 内置 MihomoPro</span><span>使用本机 666OS/YYDS Pro_cn 风格分组与 CoralBay 规则镜像，可转换其他来源的节点订阅。</span>';return}$('subPresetSource').disabled=false;let local=$('subPresetSource').value==='local';let fallback='';if(local&&!preset.cached){$('subPresetSource').value='original';local=false;fallback='<span class="warning">本机尚无该配置，已自动回退原链接。</span><br>'}$('subConfig').value=preset.id==='none'?'':(local?preset.local_url:preset.original_url);const state=preset.id==='none'?'不使用远程配置':preset.cached?`<span class="ok">● 已缓存 · ${size(preset.bytes)}</span>`:'<span class="bad">○ 未缓存，仅可使用原链接</span>';$('subPresetDetail').innerHTML=`${fallback}${state} · 当前调用：${local?'CoralBay 本机镜像':'原链接'}${preset.updated_at?` · 更新于 ${new Date(preset.updated_at).toLocaleString('zh-CN',{hour12:false})}`:''}${preset.error?`<br><span class="bad">最近同步错误：${escapeHTML(preset.error)}</span>`:''}`}
+function presetDependencies(preset){const dep=preset.rule_dependencies;if(!dep)return '<span class="template-dependency muted">尚无嵌套规则依赖统计；配置文件有本地镜像不代表其中所有规则均已本地化。</span>';const labels={local:'本机依赖',mixed:'混合来源',external:'外部依赖',unknown:'待确认',none:'无远程规则依赖'};return `<span class="template-dependency"><strong>${escapeHTML(labels[dep.status]||dep.status)}</strong> · 本机 ${Number(dep.local||0)} · 外部 ${Number(dep.external||0)} · 缺失或零覆盖 ${Number(dep.missing||0)} · 内嵌 ${Number(dep.inline||0)} · 未识别 ${Number(dep.unknown||0)}<br>${escapeHTML(dep.note||'仅分析已缓存配置，不下载嵌套规则。')}</span>`}
+function applySubscriptionPreset(){const preset=subscriptionPresets.find(item=>item.id===$('subPreset').value);if(!preset)return;if(preset.built_in){$('subPresetSource').value='local';$('subPresetSource').disabled=true;$('subConfig').value=preset.local_url;$('subPresetDetail').innerHTML='<span class="template-status adapted">● 内置 MihomoPro</span><span>使用本机 666OS/YYDS Pro_cn 风格分组与 CoralBay 规则镜像，可转换其他来源的节点订阅。</span>'+presetDependencies(preset);return}$('subPresetSource').disabled=false;let local=$('subPresetSource').value==='local';let fallback='';if(local&&!preset.cached){$('subPresetSource').value='original';local=false;fallback='<span class="warning">本机尚无该配置，已自动回退原链接。</span><br>'}$('subConfig').value=preset.id==='none'?'':(local?preset.local_url:preset.original_url);const state=preset.id==='none'?'不使用远程配置':preset.cached?`<span class="ok">● 已缓存 · ${size(preset.bytes)}</span>`:'<span class="bad">○ 未缓存，仅可使用原链接</span>';$('subPresetDetail').innerHTML=`${fallback}${state} · 配置文件来源：${local?'CoralBay 本机镜像':'上游原链接'}${preset.updated_at?` · 更新于 ${new Date(preset.updated_at).toLocaleString('zh-CN',{hour12:false})}`:''}${preset.error?`<br><span class="bad">最近同步错误：${escapeHTML(preset.error)}</span>`:''}<br><span class="muted">此选项仅控制 INI 配置文件的读取位置；其中嵌套的规则 URL 可能仍指向外部来源。</span>${presetDependencies(preset)}`}
 async function loadSubscriptionPresets(){const data=await json('/api/admin/subscription-presets');subscriptionPresets=data.presets||[];const groups=[];for(const item of subscriptionPresets){let group=groups.find(value=>value.name===item.group);if(!group){group={name:item.group,items:[]};groups.push(group)}group.items.push(item)}$('subPreset').innerHTML=groups.map(group=>`<optgroup label="${escapeHTML(group.name)}">${group.items.map(item=>`<option value="${escapeHTML(item.id)}">${item.built_in?'◆':item.cached?'●':'○'} ${escapeHTML(item.name)}</option>`).join('')}</optgroup>`).join('');$('subPresetCache').textContent=`${data.cached||0} / ${data.total||0} 已缓存 · MihomoPro 内置`;$('subPreset').onchange=applySubscriptionPreset;$('subPresetSource').onchange=applySubscriptionPreset;applySubscriptionPreset()}
 async function loadSubscriptionCapabilities(){const data=await json('/api/admin/subscription-capabilities');const modern=(data.targets||[]).filter(item=>item.modern).length;$('subCapabilities').textContent=`${(data.targets||[]).length} 种输出 · ${modern} 种现代协议`;}
 function historySettings(item){const s=item.settings;if(!s)return '<small class="muted">旧记录 · 可通过复用解析原链接</small>';const enabled=[['emoji','Emoji'],['sort','排序'],['dedup','去重'],['udp','UDP'],['xudp','XUDP'],['tfo','TFO'],['scv','跳过证书'],['tls13','TLS 1.3'],['append_type','附加协议'],['list','仅节点'],['insert','插入节点'],['expand','展开规则'],['new_name','新命名'],['fdn','过滤节点'],['clash_doh','Clash DoH'],['surge_doh','Surge DoH'],['singbox_ipv6','IPv6']].filter(([key])=>s[key]).map(([,label])=>label);const filters=[s.include&&`包含：${s.include}`,s.exclude&&`排除：${s.exclude}`,s.rename&&`重命名：${s.rename}`].filter(Boolean);const detail=[`源订阅 ${item.source_count||1} 条`,`更新 ${s.interval||24} 小时`,s.config?'远程配置':'无远程配置',...filters,...enabled].map(escapeHTML).join(' · ');return `<details class="history-settings"><summary>查看 ${3+filters.length+enabled.length} 项设置</summary><small>${detail}</small></details>`}
@@ -201,9 +286,9 @@ if ($('sync')) {
   $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:actionHeaders()});$('message').textContent='更新器已启动，请约一分钟后刷新页面'};
   $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:actionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()};
   $('refresh').onclick=()=>refreshAll(); $('ruleCard').onclick=()=>{activateTab('rules');requestAnimationFrame(()=>$('ruleSection').scrollIntoView({behavior:'smooth'}))};
-  $('clientTemplate').onchange=selectTemplate; $('templateVariant').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
+  $('clientTemplate').onchange=selectTemplate; $('templateVariant').onchange=selectTemplate; $('templateRuleSource').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
   document.querySelectorAll('[data-copy-field]').forEach(button=>button.onclick=async()=>{const value=$(button.dataset.copyField).textContent;if(value==='（留空）')return;$('message').textContent='字段已复制';await navigator.clipboard.writeText(value)});
-  $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const templateURL=$('templateVariant').value==='original'?selected.original_url:selected.online_url;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${templateURL}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
+  $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const templateURL=$('ppanelTemplateURL').textContent;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${templateURL}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
   $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
 	$('nativeSearch').oninput=renderNative; $('nativePlatform').onchange=renderNative;
 	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility();
@@ -211,7 +296,7 @@ if ($('sync')) {
 	$('copySubResult').onclick=async()=>{await navigator.clipboard.writeText($('subResultURL').textContent);$('message').textContent='订阅链接已复制'};
   $('parseSub').onclick=async()=>{try{const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('parseSubURL').value.trim()})});applyParsedSubscription(data.params||{});$('parseSubStatus').textContent=`已解析并回填 ${data.source_count} 个源订阅`;$('parseSubStatus').className='field-hint ok'}catch(error){$('parseSubStatus').textContent=`解析失败：${error.message}`;$('parseSubStatus').className='field-hint bad'}};
   $('syncSubPresets').onclick=async()=>{const button=$('syncSubPresets');try{button.disabled=true;button.textContent='正在缓存 88 条配置…';const data=await json('/api/admin/subscription-presets/sync',{method:'POST'});$('message').textContent=`远程配置同步完成：${data.cached}/${data.total} 可用，${data.failed} 条上游失败`;await loadSubscriptionPresets()}catch(error){$('message').textContent=`远程配置同步失败：${error.message}`}finally{button.disabled=false;button.textContent='立即更新本机镜像'}};
-  $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{clearTimeout(detailTimer);detailTimer=setTimeout(()=>showRuleDetails(detailPath,detailName,$('detailSearch').value),250)};
+  $('ruleCheckUpstream').onclick=()=>operate666('check');$('ruleSyncLocal').onclick=()=>operate666('sync');$('ruleRefreshStatus').onclick=async event=>{event.target.disabled=true;try{await loadRules()}catch(error){consoleNotice(error.message)}finally{event.target.disabled=false}};
   installSubscriptionUsage();
   legacyUIReady=true;
   if(!['routing','sources'].includes(currentConsolePage()))ensureLegacyData();

@@ -16,16 +16,17 @@ import (
 )
 
 type remoteConfigPreset struct {
-	ID          string    `json:"id"`
-	Group       string    `json:"group"`
-	Name        string    `json:"name"`
-	OriginalURL string    `json:"original_url"`
-	LocalURL    string    `json:"local_url"`
-	Cached      bool      `json:"cached"`
-	Bytes       int64     `json:"bytes,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	BuiltIn     bool      `json:"built_in,omitempty"`
+	ID               string                 `json:"id"`
+	Group            string                 `json:"group"`
+	Name             string                 `json:"name"`
+	OriginalURL      string                 `json:"original_url"`
+	LocalURL         string                 `json:"local_url"`
+	Cached           bool                   `json:"cached"`
+	Bytes            int64                  `json:"bytes,omitempty"`
+	UpdatedAt        time.Time              `json:"updated_at,omitempty"`
+	Error            string                 `json:"error,omitempty"`
+	BuiltIn          bool                   `json:"built_in,omitempty"`
+	RuleDependencies remoteRuleDependencies `json:"rule_dependencies"`
 }
 
 type remoteConfigSource struct {
@@ -81,6 +82,9 @@ func (s *server) subscriptionPresetItems() []remoteConfigPreset {
 			item.Error = strings.TrimSpace(string(content))
 		}
 		items = append(items, item)
+	}
+	for i := range items {
+		items[i].RuleDependencies = s.remotePresetDependencies(items[i])
 	}
 	return items
 }

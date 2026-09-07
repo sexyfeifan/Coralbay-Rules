@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,13 +25,14 @@ import (
 )
 
 const (
-	routingBootstrapRevision = "8964c30fc18a52dfc6761d30c664faaac0c219b1"
-	routingBranchURL         = "https://api.github.com/repos/MetaCubeX/meta-rules-dat/git/ref/heads/meta"
-	routingRuleMaxBytes      = 12 << 20
-	routingSnapshotMaxBytes  = 64 << 20
-	routingRuleMaxEntries    = 250000
-	routingRuleCacheTTL      = 24 * time.Hour
-	routingRuleRetryInterval = 5 * time.Minute
+	routingBootstrapRevision   = "8964c30fc18a52dfc6761d30c664faaac0c219b1"
+	routingBranchURL           = "https://api.github.com/repos/MetaCubeX/meta-rules-dat/git/ref/heads/meta"
+	routingRuleMaxBytes        = 12 << 20
+	routingSnapshotMaxBytes    = 64 << 20
+	routingRawSnapshotMaxBytes = 64 << 20
+	routingRuleMaxEntries      = 250000
+	routingRuleCacheTTL        = 24 * time.Hour
+	routingRuleRetryInterval   = 5 * time.Minute
 )
 
 // Only this reviewed catalog is accepted. No request may add arbitrary rule
@@ -55,17 +55,20 @@ type routingRule struct {
 }
 
 type routingRuleSnapshot struct {
-	Revision  string              `json:"revision"`
-	Rules     map[string][]string `json:"rules"`
-	UpdatedAt string              `json:"updated_at"`
-	LastError string              `json:"last_error"`
-	Stale     bool                `json:"stale"`
+	Revision  string                         `json:"revision"`
+	Rules     map[string][]string            `json:"rules"`
+	UpdatedAt string                         `json:"updated_at"`
+	LastError string                         `json:"last_error"`
+	Stale     bool                           `json:"stale"`
+	Resources map[string]routingRuleResource `json:"-"`
 }
 
 type routingRuleDocument struct {
-	Entries   []string `json:"entries"`
-	SHA256    string   `json:"sha256"` // Original upstream YAML, before normalization.
-	SourceURL string   `json:"source_url"`
+	Entries      []string `json:"entries"`
+	SHA256       string   `json:"sha256"` // Original upstream YAML, before normalization.
+	SourceURL    string   `json:"source_url"`
+	RawBytes     int64    `json:"raw_bytes,omitempty"`
+	DownloadedAt string   `json:"downloaded_at,omitempty"`
 }
 
 type routingDiskSnapshot struct {
@@ -371,8 +374,15 @@ func parseRoutingRuleYAML(rule routingRule, content []byte) ([]string, error) {
 // The mutex covers both synchronization and publication. Every build receives
 // one complete commit, and a failed candidate never changes the active pointer.
 func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, force bool) (routingRuleSnapshot, error) {
+	return s.loadRoutingRuleSnapshotMode(ctx, ids, force, false)
+}
+
+func (s *server) loadRoutingRuleSnapshotMode(ctx context.Context, ids []string, force, requireRaw bool) (routingRuleSnapshot, error) {
 	s.routingRuleMu.Lock()
 	defer s.routingRuleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return routingRuleSnapshot{}, err
+	}
 	index := routingRuleIndex()
 	requested := make(map[string]bool)
 	for _, id := range ids {
@@ -398,7 +408,7 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 		ttl = routingRuleRetryInterval
 	}
 	fresh := !checked.IsZero() && !checked.After(now.Add(time.Minute)) && now.Sub(checked) < ttl
-	if !force && fresh && routingSnapshotContains(previous, ids) {
+	if !force && fresh && routingSnapshotContains(previous, ids) && !requireRaw {
 		return routingPublicSnapshot(state, previous, ids), nil
 	}
 	failure := func(err error) (routingRuleSnapshot, error) {
@@ -417,6 +427,9 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 	if force || !fresh || revision == "" {
 		resolved, err := s.resolveRoutingRevision(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return routingRuleSnapshot{}, ctx.Err()
+			}
 			if routingSnapshotContains(previous, ids) {
 				return failure(fmt.Errorf("MetaCubeX 版本检查失败，保留上一有效快照: %w", err))
 			}
@@ -440,16 +453,32 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 			candidate.Rules[id] = doc
 		}
 	}
+	var candidateRawBytes int64
+	for _, doc := range candidate.Rules {
+		candidateRawBytes += doc.RawBytes
+	}
+	if candidateRawBytes > routingRawSnapshotMaxBytes {
+		return failure(fmt.Errorf("原始规则候选总量超过 64 MiB 限制"))
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	var workers sync.WaitGroup
 	var resultMu sync.Mutex
 	var fetchErr error
+	rawFiles := make(map[string][]byte)
 	semaphore := make(chan struct{}, 4)
 	var missing []routingRule
 	for _, rule := range routingRuleCatalog() {
-		if !requested[rule.ID] || len(candidate.Rules[rule.ID].Entries) != 0 {
+		if !requested[rule.ID] {
 			continue
+		}
+		if doc := candidate.Rules[rule.ID]; len(doc.Entries) != 0 {
+			if !requireRaw {
+				continue
+			}
+			if _, err := s.readRoutingRawDocument(revision, rule.ID, doc); err == nil {
+				continue
+			}
 		}
 		missing = append(missing, rule)
 	}
@@ -476,6 +505,9 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 			}
 			resultMu.Lock()
 			defer resultMu.Unlock()
+			if fetchErr != nil {
+				return
+			}
 			if err != nil {
 				if fetchErr == nil {
 					fetchErr = fmt.Errorf("%s 同步失败: %w", rule.Name, err)
@@ -483,12 +515,35 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 				}
 				return
 			}
-			candidate.Rules[rule.ID] = routingRuleDocument{Entries: entries, SHA256: routingSHA256(content), SourceURL: address}
+			nextRawBytes := candidateRawBytes + int64(len(content)) - candidate.Rules[rule.ID].RawBytes
+			if nextRawBytes > routingRawSnapshotMaxBytes {
+				fetchErr = fmt.Errorf("原始规则候选总量超过 64 MiB 限制")
+				cancel()
+				return
+			}
+			hash := routingSHA256(content)
+			if old, ok := candidate.Rules[rule.ID]; ok && old.SHA256 != hash {
+				if fetchErr == nil {
+					fetchErr = fmt.Errorf("%s 固定提交的原始文件摘要改变，已拒绝替换", rule.Name)
+					cancel()
+				}
+				return
+			}
+			candidate.Rules[rule.ID] = routingRuleDocument{Entries: entries, SHA256: hash, SourceURL: address, RawBytes: int64(len(content)), DownloadedAt: now.Format(time.RFC3339Nano)}
+			candidateRawBytes = nextRawBytes
+			rawFiles[rule.ID] = content
 		}(rule)
 	}
 	workers.Wait()
 	if fetchErr != nil {
 		return failure(fetchErr)
+	}
+	// Raw candidates are never publicly addressable before the whole candidate
+	// has validated. Published resources retain their original bytes permanently.
+	for id, raw := range rawFiles {
+		if err := s.writeRoutingRawDocument(revision, id, raw); err != nil {
+			return failure(err)
+		}
 	}
 	content, err := json.Marshal(candidate)
 	if err != nil || len(content) > routingSnapshotMaxBytes {
@@ -498,6 +553,9 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 	if err := routingRulesAtomicWrite(filepath.Join(s.routingRulesDir(), "releases", revision, hash+".json"), content); err != nil {
 		return failure(fmt.Errorf("新分流规则快照保存失败: %w", err))
 	}
+	if err := s.publishRoutingResourceManifest(candidate); err != nil {
+		return failure(err)
+	}
 	state = routingRuleState{Revision: revision, Snapshot: hash, UpdatedAt: candidate.UpdatedAt, CheckedAt: now.Format(time.RFC3339Nano), LastError: warning}
 	if err := s.saveRoutingRuleState(state); err != nil {
 		return routingRuleSnapshot{}, fmt.Errorf("新分流规则发布失败: %w", err)
@@ -506,25 +564,7 @@ func (s *server) loadRoutingRuleSnapshot(ctx context.Context, ids []string, forc
 }
 
 func (s *server) routingCatalogResponse() map[string]any {
-	s.routingRuleMu.Lock()
-	defer s.routingRuleMu.Unlock()
-	state, snapshot, err := s.readRoutingRuleState()
-	if err != nil {
-		state.LastError = err.Error()
-	}
-	type catalogItem struct {
-		routingRule
-		Cached          bool   `json:"cached"`
-		Count           int    `json:"count"`
-		SHA256          string `json:"sha256,omitempty"`
-		PinnedSourceURL string `json:"pinned_source_url,omitempty"`
-	}
-	items := make([]catalogItem, 0, len(routingRuleCatalog()))
-	for _, rule := range routingRuleCatalog() {
-		doc := snapshot.Rules[rule.ID]
-		items = append(items, catalogItem{routingRule: rule, Cached: len(doc.Entries) > 0, Count: len(doc.Entries), SHA256: doc.SHA256, PinnedSourceURL: doc.SourceURL})
-	}
-	return map[string]any{"rules": items, "revision": snapshot.Revision, "updated_at": snapshot.UpdatedAt, "checked_at": state.CheckedAt, "last_error": state.LastError, "stale": routingPublicSnapshot(state, snapshot, nil).Stale, "repository": "https://github.com/MetaCubeX/meta-rules-dat", "license_url": "https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE"}
+	return s.routingResourceCatalogResponse()
 }
 
 func (s *server) routingCatalogHandler(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +586,7 @@ func (s *server) routingRuleSyncHandler(w http.ResponseWriter, r *http.Request) 
 	for _, rule := range routingRuleCatalog() {
 		ids = append(ids, rule.ID)
 	}
-	_, err := s.loadRoutingRuleSnapshot(r.Context(), ids, true)
+	_, err := s.loadRoutingRuleSnapshotMode(r.Context(), ids, true, true)
 	result := s.routingCatalogResponse()
 	status := http.StatusOK
 	if err != nil {
@@ -558,38 +598,4 @@ func (s *server) routingRuleSyncHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	result["ok"] = status == http.StatusOK
 	writeJSON(w, status, result)
-}
-
-func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 GET"})
-		return
-	}
-	id := r.URL.Query().Get("id")
-	rule, ok := routingRuleIndex()[id]
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知分流规则"})
-		return
-	}
-	limit := 2000
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 10000 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "预览条数必须为 1 到 10000"})
-			return
-		}
-		limit = n
-	}
-	snapshot, err := s.loadRoutingRuleSnapshot(r.Context(), []string{id}, false)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	entries := snapshot.Rules[id]
-	count := len(entries)
-	if count > limit {
-		entries = entries[:limit]
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": rule.Name, "entries": entries, "count": count, "truncated": count > limit, "revision": snapshot.Revision, "updated_at": snapshot.UpdatedAt, "source_url": routingPinnedURL(rule, snapshot.Revision), "last_error": snapshot.LastError, "stale": snapshot.Stale})
 }

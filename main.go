@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.12.0"
+var version = "4.13.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -41,32 +41,36 @@ var webFS embed.FS
 var remoteConfigCatalog []byte
 
 type server struct {
-	routingDB         *sql.DB
-	routingStoreMu    sync.Mutex
-	routingRuleMu     sync.Mutex
-	routingBuildLocks sync.Map
-	routingHTTPClient *http.Client
-	routingBuildSlots chan struct{}
-	usageDB           *sql.DB
-	probeMu           sync.Mutex
-	dataDir           string
-	domain            string
-	updaterURL        string
-	updaterToken      string
-	actionToken       string
-	adminPassword     string
-	subconverterURL   string
-	interval          time.Duration
-	scheduleReset     chan time.Duration
-	nextSync          time.Time
-	mu                sync.RWMutex
-	syncing           bool
-	lastError         string
-	logs              []string
-	job               syncJob
-	latest            releaseInfo
-	latestChecked     time.Time
-	actionTimes       map[string]time.Time
+	routingDB          *sql.DB
+	routingStoreMu     sync.Mutex
+	routingRuleMu      sync.Mutex
+	routingUpstreamMu  sync.Mutex
+	legacyResourceMu   sync.Mutex
+	legacyUpstreamMu   sync.Mutex
+	resourceHTTPClient *http.Client
+	routingBuildLocks  sync.Map
+	routingHTTPClient  *http.Client
+	routingBuildSlots  chan struct{}
+	usageDB            *sql.DB
+	probeMu            sync.Mutex
+	dataDir            string
+	domain             string
+	updaterURL         string
+	updaterToken       string
+	actionToken        string
+	adminPassword      string
+	subconverterURL    string
+	interval           time.Duration
+	scheduleReset      chan time.Duration
+	nextSync           time.Time
+	mu                 sync.RWMutex
+	syncing            bool
+	lastError          string
+	logs               []string
+	job                syncJob
+	latest             releaseInfo
+	latestChecked      time.Time
+	actionTimes        map[string]time.Time
 }
 
 type syncJob struct {
@@ -177,6 +181,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	s.registerRoutingRoutes(mux)
+	s.registerLegacyResourceRoutes(mux)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
@@ -221,6 +226,8 @@ func main() {
 	mux.HandleFunc("GET /", s.publicFiles)
 
 	go s.scheduler()
+	go s.routingRulesScheduler(context.Background())
+	go func() { _, _ = s.retainLegacyResources() }()
 	go s.refreshRemoteConfigs(context.Background())
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("CoralBay Rules v%s listening on %s", version, addr)
@@ -255,47 +262,15 @@ func (s *server) publicStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (s *server) ruleCatalog(w http.ResponseWriter, _ *http.Request) {
-	content, err := os.ReadFile("/app/expected-files.txt")
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "规则清单读取失败"})
-		return
-	}
-	items := make([]map[string]any, 0, 33)
-	for _, relative := range strings.Split(strings.TrimSpace(string(content)), "\n") {
-		relative = strings.TrimSpace(relative)
-		if relative == "" {
-			continue
-		}
-		info, statErr := os.Stat(filepath.Join(s.dataDir, "current", filepath.FromSlash(relative)))
-		behavior := "domain"
-		if strings.Contains(relative, "/ip/") {
-			behavior = "ipcidr"
-		}
-		item := map[string]any{
-			"name": strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative)),
-			"path": relative, "behavior": behavior, "format": "mrs",
-			"original_url": "https://github.com/666OS/rules/raw/release/" + relative,
-			"mirror_url":   "https://" + s.domain + "/" + relative,
-			"cached":       statErr == nil, "readable": false,
-			"detail":   "MRS 是 Mihomo 编译后二进制规则集，支持下载和元数据检查，不能直接作为文本展开。",
-			"icon_url": "/_assets/icons/" + ruleIcon(relative),
-		}
-		if source := readableSource(relative); source != "" {
-			item["readable"] = true
-			item["source_url"] = "https://github.com/666OS/rules/blob/geo/" + source
-			item["detail"] = "存在 666OS geo 可读源，可展开查看全部规则条目。"
-		}
-		if statErr == nil {
-			item["bytes"] = info.Size()
-			item["modified"] = info.ModTime()
-		}
-		items = append(items, item)
-	}
-	writeJSON(w, 200, map[string]any{"rules": items, "count": len(items)})
+func (s *server) ruleCatalog(w http.ResponseWriter, r *http.Request) {
+	s.legacyRuleCatalog(w, r)
 }
 
 func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
+	manifest, manifestErr := s.retainLegacyResources()
+	if manifestErr != nil {
+		manifest = legacyResourceManifest{}
+	}
 	items := make([]map[string]any, 0, len(clientTemplates))
 	for _, client := range clientTemplates {
 		policy, rules, validation := "无", "无", "基础检查"
@@ -315,7 +290,7 @@ func (s *server) templateCatalog(w http.ResponseWriter, _ *http.Request) {
 			"original_url":          "https://" + s.domain + "/_templates/clients/original/" + client.ID + ".gotmpl",
 			"original_download_url": "/downloads/templates/" + client.ID + "?variant=original",
 			"node_rendering":        true, "policy_groups": policy, "rule_sources": rules,
-			"validation": validation,
+			"validation": validation, "rule_source_options": s.legacyTemplateOptions(client.ID, manifest),
 		})
 	}
 	writeJSON(w, 200, map[string]any{"templates": items, "count": len(items)})
@@ -1055,6 +1030,11 @@ func (s *server) startSync() bool {
 		}
 		_ = writer.Close()
 		_ = reader.Close()
+		if err == nil {
+			if _, resourceErr := s.retainLegacyResources(); resourceErr != nil {
+				s.addLog("666OS 固定版本资源保存失败：" + resourceErr.Error())
+			}
+		}
 		s.mu.Lock()
 		s.syncing = false
 		s.job.FinishedAt = time.Now().UTC()
@@ -1280,7 +1260,7 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
 		content, _ := fs.ReadFile(webFS, "web/login.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write(content)
+		w.Write([]byte(strings.ReplaceAll(string(content), "__APP_VERSION__", version)))
 		return
 	}
 	content, _ := fs.ReadFile(webFS, "web/admin.html")
@@ -1288,7 +1268,7 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("CDN-Cache-Control", "no-store")
 	w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
-	w.Write(content)
+	w.Write([]byte(strings.ReplaceAll(string(content), "__APP_VERSION__", version)))
 }
 
 func (s *server) redirectRoot(w http.ResponseWriter, r *http.Request) {
