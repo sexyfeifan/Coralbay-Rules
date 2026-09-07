@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.11.4"
+var version = "4.12.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -41,26 +41,32 @@ var webFS embed.FS
 var remoteConfigCatalog []byte
 
 type server struct {
-	usageDB         *sql.DB
-	probeMu         sync.Mutex
-	dataDir         string
-	domain          string
-	updaterURL      string
-	updaterToken    string
-	actionToken     string
-	adminPassword   string
-	subconverterURL string
-	interval        time.Duration
-	scheduleReset   chan time.Duration
-	nextSync        time.Time
-	mu              sync.RWMutex
-	syncing         bool
-	lastError       string
-	logs            []string
-	job             syncJob
-	latest          releaseInfo
-	latestChecked   time.Time
-	actionTimes     map[string]time.Time
+	routingDB         *sql.DB
+	routingStoreMu    sync.Mutex
+	routingRuleMu     sync.Mutex
+	routingBuildLocks sync.Map
+	routingHTTPClient *http.Client
+	routingBuildSlots chan struct{}
+	usageDB           *sql.DB
+	probeMu           sync.Mutex
+	dataDir           string
+	domain            string
+	updaterURL        string
+	updaterToken      string
+	actionToken       string
+	adminPassword     string
+	subconverterURL   string
+	interval          time.Duration
+	scheduleReset     chan time.Duration
+	nextSync          time.Time
+	mu                sync.RWMutex
+	syncing           bool
+	lastError         string
+	logs              []string
+	job               syncJob
+	latest            releaseInfo
+	latestChecked     time.Time
+	actionTimes       map[string]time.Time
 }
 
 type syncJob struct {
@@ -170,6 +176,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	s.registerRoutingRoutes(mux)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
@@ -1341,7 +1348,7 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" || r.URL.Path == "/assets/icon.svg" {
+	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" || r.URL.Path == "/assets/icon.svg" || r.URL.Path == "/assets/routing.js" {
 		name := "web/" + strings.TrimPrefix(r.URL.Path, "/assets/")
 		content, err := fs.ReadFile(webFS, name)
 		if err != nil {

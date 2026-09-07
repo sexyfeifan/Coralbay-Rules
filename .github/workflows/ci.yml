@@ -28,6 +28,6 @@ jobs:
       - name: Installer regression tests
         run: bash tests/install_test.sh && bash tests/sync_test.sh
       - name: Frontend syntax
-        run: node --check web/app.js && node --check web/login.js
+        run: node --check web/app.js && node --check web/login.js && node --check web/routing.js
       - name: Docker build
         run: docker build --build-arg VERSION=ci -t coralbay-rules:ci .

@@ -13,7 +13,14 @@ function connected(ok, error = '') {
   if ($('lastRefresh')) $('lastRefresh').textContent = new Date().toLocaleString('zh-CN', {hour12:false});
 }
 
-const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity']);
+const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity','management','routing','sources']);
+let routingModulePromise, consoleToastTimer;
+let legacyUIReady=false, legacyDataStarted=false;
+function ensureLegacyData(){if(!legacyUIReady||legacyDataStarted)return;legacyDataStarted=true;refreshAll()}
+function consoleNotice(message){const toast=$('consoleToast');if(!toast)return;toast.textContent=message;toast.classList.remove('hidden');clearTimeout(consoleToastTimer);consoleToastTimer=setTimeout(()=>toast.classList.add('hidden'),6500)}
+function setNavigationOpen(open){const wasOpen=$('consoleNavigation').classList.contains('open');$('consoleNavigation').classList.toggle('open',open);$('navBackdrop').classList.toggle('hidden',!open);$('navToggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('nav-open',open);if(open)$('navClose').focus();else if(wasOpen)$('navToggle').focus()}
+function currentConsolePage(){return location.pathname.replace(/\/$/,'')==='/routing'?(location.hash==='#sources'?'sources':'routing'):location.hash.slice(1)}
+async function loadRoutingModule(view){try{if(!routingModulePromise)routingModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/routing.js?v=routing-v1';script.onload=()=>resolve(window.CoralBayRouting);script.onerror=()=>{script.remove();routingModulePromise=null;reject(new Error('分流页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await routingModulePromise;await module.activate(view)}catch(error){consoleNotice(error.message)}}
 function prepareTabs() {
   const groups = {
     overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
@@ -36,10 +43,15 @@ function activateTab(name, options = {}) {
   document.querySelectorAll('[data-tab]').forEach(button => {
     const active = button.dataset.tab === selected;
     button.classList.toggle('active', active);
-    button.setAttribute('aria-selected', String(active));
+    if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
   });
   document.querySelectorAll('[data-panel]').forEach(panel => panel.classList.toggle('active', panel.dataset.panel === selected));
-  if (options.updateHash !== false && location.hash !== `#${selected}`) history.replaceState(null, '', `#${selected}`);
+  const destination=selected==='routing'?'/routing':selected==='sources'?'/routing#sources':'/#'+selected;
+  if (options.updateHash !== false && location.pathname+location.hash!==destination) history.pushState(null, '', destination);
+  if($('navToggle'))setNavigationOpen(false);
+  if(selected==='routing'||selected==='sources')loadRoutingModule(selected);
+  if(selected==='management'&&$('manageRouting').classList.contains('active'))loadRoutingModule('management');
+  else if(selected!=='routing'&&selected!=='sources')ensureLegacyData();
 }
 
 async function publicStatus() {
@@ -145,7 +157,7 @@ function applySubscriptionPreset(){const preset=subscriptionPresets.find(item=>i
 async function loadSubscriptionPresets(){const data=await json('/api/admin/subscription-presets');subscriptionPresets=data.presets||[];const groups=[];for(const item of subscriptionPresets){let group=groups.find(value=>value.name===item.group);if(!group){group={name:item.group,items:[]};groups.push(group)}group.items.push(item)}$('subPreset').innerHTML=groups.map(group=>`<optgroup label="${escapeHTML(group.name)}">${group.items.map(item=>`<option value="${escapeHTML(item.id)}">${item.built_in?'◆':item.cached?'●':'○'} ${escapeHTML(item.name)}</option>`).join('')}</optgroup>`).join('');$('subPresetCache').textContent=`${data.cached||0} / ${data.total||0} 已缓存 · MihomoPro 内置`;$('subPreset').onchange=applySubscriptionPreset;$('subPresetSource').onchange=applySubscriptionPreset;applySubscriptionPreset()}
 async function loadSubscriptionCapabilities(){const data=await json('/api/admin/subscription-capabilities');const modern=(data.targets||[]).filter(item=>item.modern).length;$('subCapabilities').textContent=`${(data.targets||[]).length} 种输出 · ${modern} 种现代协议`;}
 function historySettings(item){const s=item.settings;if(!s)return '<small class="muted">旧记录 · 可通过复用解析原链接</small>';const enabled=[['emoji','Emoji'],['sort','排序'],['dedup','去重'],['udp','UDP'],['xudp','XUDP'],['tfo','TFO'],['scv','跳过证书'],['tls13','TLS 1.3'],['append_type','附加协议'],['list','仅节点'],['insert','插入节点'],['expand','展开规则'],['new_name','新命名'],['fdn','过滤节点'],['clash_doh','Clash DoH'],['surge_doh','Surge DoH'],['singbox_ipv6','IPv6']].filter(([key])=>s[key]).map(([,label])=>label);const filters=[s.include&&`包含：${s.include}`,s.exclude&&`排除：${s.exclude}`,s.rename&&`重命名：${s.rename}`].filter(Boolean);const detail=[`源订阅 ${item.source_count||1} 条`,`更新 ${s.interval||24} 小时`,s.config?'远程配置':'无远程配置',...filters,...enabled].map(escapeHTML).join(' · ');return `<details class="history-settings"><summary>查看 ${3+filters.length+enabled.length} 项设置</summary><small>${detail}</small></details>`}
-async function reuseSubscriptionHistory(url){const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});applyParsedSubscription(data.params||{});$('subPreset').value='none';$('subPresetSource').disabled=false;$('subPresetDetail').textContent='已从历史记录恢复设置；远程配置 URL 保持记录中的值。';$('subURLs').scrollIntoView({behavior:'smooth',block:'center'});$('message').textContent=`已复用历史设置：${data.source_count} 个源订阅`}
+async function reuseSubscriptionHistory(url){const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});applyParsedSubscription(data.params||{});$('subPreset').value='none';$('subPresetSource').disabled=false;$('subPresetDetail').textContent='已从历史记录恢复设置；远程配置 URL 保持记录中的值。';activateTab('subscription');$('subURLs').scrollIntoView({behavior:'smooth',block:'center'});$('message').textContent=`已复用历史设置：${data.source_count} 个源订阅`}
 function subscriptionPayload(){return{target:$('subTarget').value,url:$('subURLs').value.split(/[\n|]+/).map(value=>value.trim()).filter(Boolean).join('|'),config:$('subConfig').value.trim(),filename:$('subFilename').value.trim(),include:$('subInclude').value.trim(),exclude:$('subExclude').value.trim(),rename:$('subRename').value.trim(),dev_id:$('subDeviceID').value.trim(),surge_version:Number($('subSurgeVersion').value)||4,interval:Number($('subInterval').value)||24,emoji:$('subEmoji').checked,sort:$('subSort').checked,dedup:$('subDedup').checked,udp:$('subUDP').checked,xudp:$('subXUDP').checked,tfo:$('subTFO').checked,scv:$('subSCV').checked,tls13:$('subTLS13').checked,append_type:$('subAppendType').checked,list:$('subListOnly').checked,insert:$('subInsert').checked,expand:$('subExpand').checked,new_name:$('subNewName').checked,fdn:$('subFDN').checked,clash_doh:$('subClashDoH').checked,surge_doh:$('subSurgeDoH').checked,singbox_ipv6:$('subSingboxIPv6').checked}}
 function firstParam(params,key){const value=params[key];return Array.isArray(value)?(value[0]||''):value||''}
 function applyParsedSubscription(params){const text=(key,id)=>{if($(id))$(id).value=firstParam(params,key)},check=(key,id)=>{if($(id))$(id).checked=firstParam(params,key)==='true'};text('target','subTarget');text('url','subURLs');text('config','subConfig');text('filename','subFilename');text('include','subInclude');text('exclude','subExclude');text('rename','subRename');text('dev_id','subDeviceID');const seconds=Number(firstParam(params,'interval'));if(seconds)$('subInterval').value=Math.max(1,Math.round(seconds/3600));const ver=firstParam(params,'ver');if(ver)$('subSurgeVersion').value=ver;[['emoji','subEmoji'],['sort','subSort'],['dedup','subDedup'],['udp','subUDP'],['xudp','subXUDP'],['tfo','subTFO'],['scv','subSCV'],['tls13','subTLS13'],['append_type','subAppendType'],['list','subListOnly'],['insert','subInsert'],['expand','subExpand'],['new_name','subNewName'],['fdn','subFDN'],['clash.doh','subClashDoH'],['surge.doh','subSurgeDoH']].forEach(([key,id])=>check(key,id));$('subSingboxIPv6').checked=firstParam(params,'singbox.ipv6')==='1';updateSubCompatibility()}
@@ -169,11 +181,21 @@ async function loadAdmin() {
 }
 async function rollback(commit) { if(!confirm(`确认回滚到 ${short(commit)}？`)) return; await json('/api/admin/rollback',{method:'POST',headers:actionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({commit})}); $('message').textContent='回滚完成'; loadAdmin(); }
 
+async function loadSubscriptionKeysStatus(){return json('/api/admin/subscription-keys').then(k=>{$('signingInfo').textContent='独立签名 v2 · 旧链接兼容至 '+new Date(k.legacy_until).toLocaleDateString('zh-CN')}).catch(()=>{$('signingInfo').textContent='签名状态读取失败'})}
+async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus(),loadSubscriptionPresets(),loadSubscriptionCapabilities(),loadSubscriptionUsage(),loadSubscriptionKeysStatus()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
+
 if ($('sync')) {
 	prepareTabs();
 	document.querySelectorAll('[data-tab]').forEach(button => button.onclick=()=>activateTab(button.dataset.tab));
-	window.addEventListener('hashchange',()=>activateTab(location.hash.slice(1),{updateHash:false}));
-	activateTab(location.hash.slice(1),{updateHash:false});
+	window.addEventListener('hashchange',()=>activateTab(currentConsolePage(),{updateHash:false}));
+  window.addEventListener('popstate',()=>activateTab(currentConsolePage(),{updateHash:false}));
+	activateTab(currentConsolePage(),{updateHash:false});
+  $('navToggle').onclick=()=>setNavigationOpen(!$('consoleNavigation').classList.contains('open'));$('navClose').onclick=$('navBackdrop').onclick=()=>setNavigationOpen(false);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')setNavigationOpen(false);if(event.key==='Tab'&&$('consoleNavigation').classList.contains('open')){const buttons=[...$('consoleNavigation').querySelectorAll('button')].filter(button=>button.offsetParent!==null);const first=buttons[0],last=buttons[buttons.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}}});
+  window.addEventListener('resize',()=>{if(window.innerWidth>1000)setNavigationOpen(false)});
+  const chooseManagement=custom=>{$('manageLegacy').classList.toggle('active',!custom);$('manageRouting').classList.toggle('active',custom);$('manageLegacy').setAttribute('aria-pressed',String(!custom));$('manageRouting').setAttribute('aria-pressed',String(custom));$('legacyManagement').classList.toggle('hidden',custom);$('routingManagement').classList.toggle('hidden',!custom);if(custom)loadRoutingModule('management');else ensureLegacyData()};
+  $('manageLegacy').onclick=()=>chooseManagement(false);$('manageRouting').onclick=()=>chooseManagement(true);
+  new MutationObserver(()=>{if($('message').textContent&&!document.querySelector('[data-tab="overview"]').classList.contains('active'))consoleNotice($('message').textContent)}).observe($('message'),{childList:true,subtree:true,characterData:true});
 	$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.replace('/')};
   $('sync').onclick=async()=>{try{await json('/api/admin/sync',{method:'POST',headers:actionHeaders()});$('message').textContent='同步已启动';setTimeout(()=>{loadAdmin();loadRules();loadTemplates()},1500)}catch(error){if(error.message.includes('令牌'))sessionStorage.removeItem('coralbayActionToken');$('message').textContent=error.message}};
   $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:actionHeaders()});$('message').textContent='更新器已启动，请约一分钟后刷新页面'};
@@ -184,27 +206,26 @@ if ($('sync')) {
   $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const templateURL=$('templateVariant').value==='original'?selected.original_url:selected.online_url;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${templateURL}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
   $('conversionSearch').oninput=renderConversions; $('conversionKind').onchange=renderConversions;
 	$('nativeSearch').oninput=renderNative; $('nativePlatform').onchange=renderNative;
-	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility(); loadSubconverterStatus();
+	$('subTarget').onchange=updateSubCompatibility; updateSubCompatibility();
 	$('generateSub').onclick=async()=>{const feedback=document.querySelector('.converter-actions .field-hint');try{$('generateSub').disabled=true;$('generateSub').textContent='正在拉取并验证…';feedback.textContent='正在由本机后端获取并解析订阅…';feedback.classList.remove('bad','ok');$('subResult').classList.add('hidden');const data=await json('/api/admin/subscription-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(subscriptionPayload())});$('subResultURL').textContent=data.url;$('subValidation').textContent=`✓ 已验证 ${data.node_count} 个可解析节点`;$('openSubResult').href=data.url;$('downloadSubResult').href=data.url;$('subQR').src=`/api/admin/subscription-qr?url=${encodeURIComponent(data.url)}`;$('subResult').classList.remove('hidden');feedback.textContent=`转换验证通过：${data.node_count} 个可解析节点`;feedback.classList.add('ok');usagePage=1;await loadSubscriptionUsage()}catch(error){feedback.textContent=`转换失败：${error.message}`;feedback.classList.add('bad')}finally{$('generateSub').disabled=false;$('generateSub').textContent='测试并生成'}};
 	$('copySubResult').onclick=async()=>{await navigator.clipboard.writeText($('subResultURL').textContent);$('message').textContent='订阅链接已复制'};
   $('parseSub').onclick=async()=>{try{const data=await json('/api/admin/subscription-parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('parseSubURL').value.trim()})});applyParsedSubscription(data.params||{});$('parseSubStatus').textContent=`已解析并回填 ${data.source_count} 个源订阅`;$('parseSubStatus').className='field-hint ok'}catch(error){$('parseSubStatus').textContent=`解析失败：${error.message}`;$('parseSubStatus').className='field-hint bad'}};
   $('syncSubPresets').onclick=async()=>{const button=$('syncSubPresets');try{button.disabled=true;button.textContent='正在缓存 88 条配置…';const data=await json('/api/admin/subscription-presets/sync',{method:'POST'});$('message').textContent=`远程配置同步完成：${data.cached}/${data.total} 可用，${data.failed} 条上游失败`;await loadSubscriptionPresets()}catch(error){$('message').textContent=`远程配置同步失败：${error.message}`}finally{button.disabled=false;button.textContent='立即更新本机镜像'}};
   $('closeDetails').onclick=()=>$('detailPanel').classList.add('hidden'); $('detailSearch').oninput=()=>{clearTimeout(detailTimer);detailTimer=setTimeout(()=>showRuleDetails(detailPath,detailName,$('detailSearch').value),250)};
-  async function refreshAll(){const results=await Promise.allSettled([loadAdmin(),loadRules(),loadTemplates(),loadConversions(),loadNative(),loadSubconverterStatus(),loadSubscriptionPresets(),loadSubscriptionCapabilities(),loadSubscriptionUsage()]);const failed=results.find(item=>item.status==='rejected');if(failed)connected(false,`部分数据加载失败：${failed.reason.message}`)}
   installSubscriptionUsage();
-  refreshAll();
+  legacyUIReady=true;
+  if(!['routing','sources'].includes(currentConsolePage()))ensureLegacyData();
 }
 publicStatus();
 
 function installSubscriptionUsage(){
  const panel=document.createElement('section');panel.id='subscriptionManager';panel.className='inner-card section-space';
  panel.innerHTML='<div class="config-head"><div><h3>订阅管理</h3><p class="field-hint">生成设置、链接状态与拉取统计集中管理；相同转换参数合并为一条订阅。</p></div><button id="refreshLinkUsage" class="secondary">刷新</button></div><div class="subscription-manager-controls"><input id="usageSearch" aria-label="搜索订阅" placeholder="名称、编号、协议或客户端"><select id="usageState" aria-label="状态筛选"><option value="">全部订阅</option><option value="with_history">有生成记录</option><option value="without_history">无生成记录</option><option value="disabled">已停用</option><option value="archived">已删除（回收站）</option><option value="enabled">已启用</option><option value="never">尚未拉取</option><option value="recent">最近 48 小时有访问</option><option value="inactive">超过 48 小时未访问</option></select><select id="usageSort" aria-label="排序"><option value="activity">最近生成或拉取优先</option><option value="access">最近拉取优先</option></select><button id="usageFilter" class="secondary">筛选</button></div><div class="subscription-manager-tools"><span id="signingInfo" class="field-hint"></span><details class="manager-more"><summary>批量维护</summary><button id="clearSubHistory" class="link-button danger-link">清空生成记录</button><button id="usagePrune" class="link-button">清理过期统计</button></details></div><p class="field-hint">删除生成记录不会影响订阅；删除订阅会将其移入回收站并停止后续更新。次数包含浏览器下载，不代表在线人数。仅保留最近 100 条生成记录。</p><div id="linkUsageFeedback" class="field-hint" role="status" aria-live="polite"></div><div class="table-wrap"><table class="subscription-manager-table"><thead><tr><th>订阅</th><th>状态 / 拉取时间</th><th>成功 / 失败 / 拦截</th><th>生成设置与记录</th><th>操作</th></tr></thead><tbody id="linkUsageRows"><tr><td colspan="5">加载中</td></tr></tbody></table></div><div class="subscription-manager-pagination"><button id="usagePrev" class="secondary">上一页</button><button id="usageNext" class="secondary">下一页</button></div>';
- $('subscriptionConverter').appendChild(panel);
+ $('legacyManagement').appendChild(panel);
  $('usageFilter').onclick=()=>{usagePage=1;loadSubscriptionUsage()};
  $('usageSearch').onkeydown=e=>{if(e.key==='Enter'){$('usageFilter').click()}};
  $('usagePrev').onclick=()=>{usagePage--;loadSubscriptionUsage()};$('usageNext').onclick=()=>{usagePage++;loadSubscriptionUsage()};
  $('refreshLinkUsage').onclick=loadSubscriptionUsage;
- json('/api/admin/subscription-keys').then(k=>{$('signingInfo').textContent='独立签名 v2 · 旧链接兼容至 '+new Date(k.legacy_until).toLocaleDateString('zh-CN')}).catch(()=>{$('signingInfo').textContent='签名状态读取失败'});
  $('clearSubHistory').onclick=async()=>{if(!confirm('清空全部生成记录？订阅仍保留在此列表，链接状态、拉取统计均不改变。'))return;try{await json('/api/admin/subscription-history',{method:'DELETE'});await loadSubscriptionUsage();$('linkUsageFeedback').textContent='生成记录已清空，订阅链接和统计仍保留。'}catch(e){$('linkUsageFeedback').textContent=e.message}};
  $('usagePrune').onclick=async()=>{if(!confirm('重置 180 天未访问的已启用链接的累计次数和客户端信息？保留链接、最后访问时间与全部停用记录。'))return;try{const d=await json('/api/admin/subscription-usage/prune',{method:'POST'});await loadSubscriptionUsage();$('linkUsageFeedback').textContent='已重置 '+d.reset+' 条过期统计'}catch(e){$('linkUsageFeedback').textContent=e.message}};
 }

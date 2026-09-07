@@ -114,10 +114,19 @@ func TestPPanelAndSubscriptionEntrancesStaySeparate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(content)
-	for _, marker := range []string{`data-tab="templates">PPanel 模板`, `data-tab="subscription">订阅转换`, `id="templates"`, `id="subscriptionConverter"`} {
-		if !strings.Contains(text, marker) {
-			t.Errorf("missing separate entrance marker %q", marker)
+	navigation, err := os.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []struct{ tab, panel, mapping string }{
+		{"templates", "templates", `templates: ['#templates']`},
+		{"subscription", "subscriptionConverter", `subscription: ['#subscriptionConverter']`},
+	} {
+		if strings.Count(string(content), `data-tab="`+page.tab+`"`) != 1 || strings.Count(string(content), `id="`+page.panel+`"`) != 1 {
+			t.Errorf("%s needs one navigation entry and its own panel", page.tab)
+		}
+		if !strings.Contains(string(navigation), page.mapping) {
+			t.Errorf("%s navigation must map to its independent panel", page.tab)
 		}
 	}
 }

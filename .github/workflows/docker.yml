@@ -26,6 +26,7 @@ jobs:
           bash tests/sync_test.sh
           node --check web/app.js
           node --check web/login.js
+          node --check web/routing.js
       - name: Resolve version
         id: version
         shell: bash

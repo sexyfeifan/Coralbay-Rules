@@ -44,8 +44,12 @@ func TestRuleResourcesAppearBeforeConvertedCatalog(t *testing.T) {
 	if !strings.Contains(text, "🤌") {
 		t.Fatal("project icon is missing")
 	}
-	if !strings.Contains(text, `data-tab="overwrite">MihomoPro 覆写`) || !strings.Contains(text, `id="overwritePanel"`) {
-		t.Fatal("MihomoPro overwrite must have its own tab")
+	navigation, err := os.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(text, `data-tab="overwrite"`) != 1 || strings.Count(text, `id="overwritePanel"`) != 1 || !strings.Contains(string(navigation), `overwrite: ['#overwritePanel']`) {
+		t.Fatal("MihomoPro overwrite must have one independent navigation entry mapped to its own panel")
 	}
 	if !strings.Contains(text, `class="template-legend"`) {
 		t.Fatal("PPanel template capability legend is missing")
