@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.13.0"
+var version = "4.14.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -47,6 +47,9 @@ type server struct {
 	routingUpstreamMu  sync.Mutex
 	legacyResourceMu   sync.Mutex
 	legacyUpstreamMu   sync.Mutex
+	remoteConfigMu     sync.Mutex
+	mrsDecodeMu        sync.Mutex
+	mrsDecoder         func(context.Context, string, []byte) ([]string, error)
 	resourceHTTPClient *http.Client
 	routingBuildLocks  sync.Map
 	routingHTTPClient  *http.Client
@@ -181,6 +184,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	s.registerRoutingRoutes(mux)
+	s.registerRoutingResourceMaintenanceRoutes(mux)
 	s.registerLegacyResourceRoutes(mux)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /api/login", s.login)
@@ -462,7 +466,13 @@ func (s *server) createSubscriptionLink(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]byte, http.Header, error) {
+	content, headers, _, err := s.convertSubscriptionWithMetadata(ctx, params)
+	return content, headers, err
+}
+
+func (s *server) convertSubscriptionBackend(ctx context.Context, params url.Values) ([]byte, http.Header, error) {
 	upstreamParams := cloneURLValues(params)
+	upstreamParams.Del("rule_source")
 	if upstreamParams.Get("target") == "stash" {
 		// subconverter has no Stash target. Stash consumes Clash.Meta YAML;
 		// retain "stash" in the signed public URL while using clash upstream.
@@ -478,9 +488,12 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 		return nil, nil, fmt.Errorf("转换后端不可用：%v", err)
 	}
 	defer resp.Body.Close()
-	content, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	content, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 	if readErr != nil {
 		return nil, nil, fmt.Errorf("读取转换结果失败")
+	}
+	if len(content) > 16<<20 {
+		return nil, nil, fmt.Errorf("转换结果超过 16 MiB，已拒绝截断内容，请拆分订阅")
 	}
 	if resp.StatusCode != http.StatusOK {
 		detail := strings.TrimSpace(string(content))
@@ -499,6 +512,14 @@ func (s *server) convertSubscription(ctx context.Context, params url.Values) ([]
 		content = restoreStashVLESSFields(ctx, params.Get("url"), content)
 	}
 	if target := params.Get("target"); target == "stash" || target == "clash" || target == "clashr" {
+		if params.Get("list") != "true" && params.Get("config") != "" {
+			var cfg struct {
+				Rules []string `yaml:"rules"`
+			}
+			if yaml.Unmarshal(content, &cfg) != nil || len(cfg.Rules) == 0 {
+				return nil, nil, fmt.Errorf("转换结果缺少所选配置的分流规则，未生成完整订阅")
+			}
+		}
 		if err := validateYAMLReferences(content); err != nil {
 			return nil, nil, err
 		}
@@ -629,7 +650,7 @@ func (s *server) signedSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", headers.Get("Content-Type"))
-	for _, header := range []string{"Subscription-Userinfo", "Profile-Update-Interval"} {
+	for _, header := range []string{"Subscription-Userinfo", "Profile-Update-Interval", "X-CoralBay-Rule-Source", "X-CoralBay-Rule-Revision", "X-CoralBay-Rule-Delivery"} {
 		if value := headers.Get(header); value != "" {
 			w.Header().Set(header, value)
 		}

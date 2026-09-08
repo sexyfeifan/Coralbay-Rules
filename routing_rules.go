@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -430,7 +431,7 @@ func (s *server) loadRoutingRuleSnapshotMode(ctx context.Context, ids []string, 
 			if ctx.Err() != nil {
 				return routingRuleSnapshot{}, ctx.Err()
 			}
-			if routingSnapshotContains(previous, ids) {
+			if routingSnapshotContains(previous, ids) && !requireRaw {
 				return failure(fmt.Errorf("MetaCubeX 版本检查失败，保留上一有效快照: %w", err))
 			}
 			if revision == "" {
@@ -538,23 +539,55 @@ func (s *server) loadRoutingRuleSnapshotMode(ctx context.Context, ids []string, 
 	if fetchErr != nil {
 		return failure(fetchErr)
 	}
+	// Remove newly created, unpublished candidates on failure. Existing fixed
+	// resources are never removed, including valid publications whose pointer
+	// update could not be completed.
+	var created []string
+	published := false
+	defer func() {
+		if !published {
+			s.cleanupRoutingCandidatePaths(revision, created)
+		}
+	}()
 	// Raw candidates are never publicly addressable before the whole candidate
 	// has validated. Published resources retain their original bytes permanently.
 	for id, raw := range rawFiles {
+		path := s.routingRawPath(revision, id)
+		if _, err := os.Stat(path); os.IsNotExist(err) && !s.routingPreviouslyKnownResource(revision, id) {
+			created = append(created, path)
+		}
 		if err := s.writeRoutingRawDocument(revision, id, raw); err != nil {
 			return failure(err)
 		}
+	}
+	unchanged := revision == previous.Revision && reflect.DeepEqual(candidate.Rules, previous.Rules)
+	if unchanged {
+		candidate.UpdatedAt = previous.UpdatedAt
 	}
 	content, err := json.Marshal(candidate)
 	if err != nil || len(content) > routingSnapshotMaxBytes {
 		return failure(fmt.Errorf("新分流规则快照超过大小限制或编码失败"))
 	}
 	hash := routingSHA256(content)
-	if err := routingRulesAtomicWrite(filepath.Join(s.routingRulesDir(), "releases", revision, hash+".json"), content); err != nil {
-		return failure(fmt.Errorf("新分流规则快照保存失败: %w", err))
+	if !unchanged {
+		path := filepath.Join(s.routingRulesDir(), "releases", revision, hash+".json")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			created = append(created, path)
+		}
+		if err := routingRulesAtomicWrite(path, content); err != nil {
+			return failure(fmt.Errorf("新分流规则快照保存失败: %w", err))
+		}
 	}
 	if err := s.publishRoutingResourceManifest(candidate); err != nil {
 		return failure(err)
+	}
+	published = true
+	if unchanged {
+		state.CheckedAt, state.LastError = now.Format(time.RFC3339Nano), warning
+		if err := s.saveRoutingRuleState(state); err != nil {
+			return routingRuleSnapshot{}, err
+		}
+		return routingPublicSnapshot(state, previous, ids), nil
 	}
 	state = routingRuleState{Revision: revision, Snapshot: hash, UpdatedAt: candidate.UpdatedAt, CheckedAt: now.Format(time.RFC3339Nano), LastError: warning}
 	if err := s.saveRoutingRuleState(state); err != nil {

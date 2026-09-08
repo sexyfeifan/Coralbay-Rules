@@ -7,7 +7,7 @@ branch="${RULES_BRANCH:-release}"
 interval="${SYNC_INTERVAL:-21600}"
 mirror_domain="${MIRROR_DOMAIN:-rules.coralbay.top}"
 expected_file="/app/expected-files.txt"
-generator_version="${GENERATOR_VERSION:-4.13.0}"
+generator_version="${GENERATOR_VERSION:-4.14.0}"
 generator_version="${generator_version#v}"
 data_dir="${DATA_DIR:-/data}"
 lock_file="$data_dir/.publish.lock"
@@ -65,9 +65,6 @@ sync_once() (
   geo_commit="$(git -C "$geo_staging" rev-parse HEAD)"
 
   geo_short="$(printf '%s' "$geo_commit" | cut -c1-12)"
-  config_hash="$(printf '%s' "$mirror_domain" | sha256sum | cut -c1-12)"
-  release_id="${commit}-${geo_short}-v${generator_version}-${config_hash}"
-  release_dir="$data_dir/releases/$release_id"
   rm -rf "$staging/.git"
   mv "$staging" "$build_dir"
 
@@ -99,6 +96,13 @@ sync_once() (
     mihomopro_origin="bundled-fallback"
     log "MihomoPro 上游不可用，使用镜像内置快照"
   fi
+  # YYDS is a separate upstream. Its actual bytes (and the bundled overwrite)
+  # must identify the release even when both rules commits remain unchanged.
+  mihomopro_sha256="$(sha256sum "$mihomopro_source" | cut -d ' ' -f1)"
+  overwrite_sha256="$(sha256sum /app/templates/openclash/MihomoPro_overwrite.conf | cut -d ' ' -f1)"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n' "$mirror_domain" "$mihomopro_sha256" "$overwrite_sha256" "$mihomopro_origin" | sha256sum | cut -c1-12)"
+  release_id="${commit}-${geo_short}-v${generator_version}-${config_hash}"
+  release_dir="$data_dir/releases/$release_id"
   sed \
     -e "s|https://github.com/666OS/rules/raw/release/|$rules_base_url|g" \
     -e "s|https://github.com/Koolson/Qure/raw/master/IconSet/Color/|$assets_base_url|g" \
@@ -279,7 +283,7 @@ sync_once() (
     return 1
   fi
   cat > "$build_dir/_mirror/status.json.next" <<EOF
-{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","mirror_domain":"$mirror_domain","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT,"mihomopro_origin":"$mihomopro_origin"}
+{"ok":true,"repository":"$repository","branch":"$branch","commit":"$commit","geo_commit":"$geo_commit","release_id":"$release_id","generator_version":"$generator_version","mirror_domain":"$mirror_domain","synced_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","validated_files":$VALIDATED_COUNT,"mihomopro_origin":"$mihomopro_origin","mihomopro_sha256":"$mihomopro_sha256","overwrite_sha256":"$overwrite_sha256"}
 EOF
   mv -f "$build_dir/_mirror/status.json.next" "$build_dir/_mirror/status.json"
   cat > "$build_dir/index.html.next" <<EOF

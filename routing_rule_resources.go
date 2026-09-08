@@ -6,11 +6,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +53,31 @@ type routingUpstreamResourceStatus struct {
 	LastError string              `json:"last_error"`
 }
 
+var routingErrNoRepairVersion = errors.New("没有已知本地版本，请先同步 MetaCubeX 规则")
+
+func (s *server) cleanupRoutingCandidatePaths(revision string, paths []string) {
+	for _, path := range paths {
+		_ = os.Remove(path)
+	}
+	// Remove only empty candidate directories, never retained files or manifests.
+	dir := filepath.Join(s.routingRulesDir(), "releases", revision)
+	_ = os.Remove(filepath.Join(dir, "raw"))
+	_ = os.Remove(dir)
+}
+
+func (s *server) routingPreviouslyKnownResource(revision, id string) bool {
+	if manifest, err := s.readRoutingResourceManifest(revision); err == nil {
+		if _, exists := manifest.Resources[id]; exists {
+			return true
+		}
+	}
+	if trusted, err := s.routingTrustedSnapshot(revision); err == nil {
+		_, exists := trusted.Rules[id]
+		return exists
+	}
+	return false
+}
+
 func (s *server) routingRawResourceURL(revision, id string) string {
 	if !routingRevisionPattern.MatchString(revision) {
 		return ""
@@ -81,8 +110,15 @@ func (s *server) writeRoutingRawDocument(revision, id string, content []byte) er
 		if published, exists := manifest.Resources[id]; exists && published.SHA256 != routingSHA256(content) {
 			return fmt.Errorf("%s 的已发布固定版本内容不一致，拒绝改写原始资源", id)
 		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("无法校验已有原始资源，拒绝改写: %w", err)
+	} else {
+		trusted, trustErr := s.routingTrustedSnapshot(revision)
+		if trustErr == nil {
+			if old, exists := trusted.Rules[id]; exists && old.SHA256 != routingSHA256(content) {
+				return fmt.Errorf("%s 与已留存快照摘要不同，拒绝改写固定资源", id)
+			}
+		} else if !os.IsNotExist(trustErr) || !os.IsNotExist(err) {
+			return fmt.Errorf("无法校验已有原始资源，拒绝改写: %w", trustErr)
+		}
 	}
 	return routingRulesAtomicWrite(s.routingRawPath(revision, id), content)
 }
@@ -129,11 +165,26 @@ func (s *server) readRoutingResourceManifest(revision string) (routingResourceMa
 
 func (s *server) publishRoutingResourceManifest(snapshot routingDiskSnapshot) error {
 	manifest, err := s.readRoutingResourceManifest(snapshot.Revision)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("原始规则资源清单读取失败，拒绝覆盖: %w", err)
-	}
-	if os.IsNotExist(err) {
+	if err != nil {
 		manifest = routingResourceManifest{Version: 1, Revision: snapshot.Revision, Resources: map[string]routingRuleResource{}}
+		trusted, trustErr := s.routingTrustedSnapshot(snapshot.Revision)
+		if trustErr != nil && (!os.IsNotExist(trustErr) || !os.IsNotExist(err)) {
+			return fmt.Errorf("清单损坏且没有可校验的恢复依据: %w", trustErr)
+		}
+		for id, doc := range trusted.Rules {
+			if candidate, exists := snapshot.Rules[id]; exists {
+				if candidate.SHA256 != doc.SHA256 {
+					return fmt.Errorf("%s 固定资源与历史快照摘要冲突，拒绝重建清单", id)
+				}
+				continue
+			}
+			if doc.RawBytes > 0 {
+				if _, err := s.readRoutingRawDocument(snapshot.Revision, id, doc); err != nil {
+					return fmt.Errorf("历史资源 %s 尚未修复，拒绝发布不完整清单: %w", id, err)
+				}
+				manifest.Resources[id] = routingResourceFromDocument(routingRuleIndex()[id], snapshot.Revision, doc)
+			}
+		}
 	}
 	if manifest.Resources == nil {
 		manifest.Resources = map[string]routingRuleResource{}
@@ -330,10 +381,60 @@ func (s *server) readRoutingUpstreamResourceStatus(revision, id string) routingU
 		return routingUpstreamResourceStatus{}
 	}
 	resource := result.Resource
-	if resource.SHA256 != "" && (resource.ID != id || resource.Revision != revision || resource.SourceURL != routingPinnedURL(rule, revision) || !routingHashPattern.MatchString(resource.SHA256) || resource.Bytes < 1 || resource.Bytes > routingRuleMaxBytes) {
+	if resource.SHA256 != "" && (resource.ID != id || resource.Revision != revision || resource.SourceURL != routingPinnedURL(rule, revision) || resource.Format != "yaml" || resource.Behavior != rule.Behavior || resource.Count < 1 || resource.Count > routingRuleMaxEntries || !routingHashPattern.MatchString(resource.SHA256) || resource.Bytes < 1 || resource.Bytes > routingRuleMaxBytes) {
 		return routingUpstreamResourceStatus{LastError: "上游文件检查缓存无效"}
 	}
 	return result
+}
+
+func (s *server) routingLocalResourceHealth(snapshot routingDiskSnapshot, revision, id string) (routingRuleResource, string, error) {
+	resource, err := s.routingPublishedResource(revision, id)
+	doc := snapshot.Rules[id]
+	if err == nil {
+		if revision == snapshot.Revision && len(doc.Entries) == 0 {
+			return resource, "missing", fmt.Errorf("当前快照未包含此规则，请修复本地快照")
+		}
+		if revision == snapshot.Revision && len(doc.Entries) > 0 && (resource.SHA256 != doc.SHA256 || resource.Count != len(doc.Entries)) {
+			return resource, "corrupt", fmt.Errorf("原始资源与已发布快照不一致")
+		}
+		return resource, "verified", nil
+	}
+	if revision == snapshot.Revision && len(doc.Entries) > 0 && doc.RawBytes == 0 {
+		return resource, "legacy_only", err
+	}
+	if !routingRevisionPattern.MatchString(revision) {
+		return resource, "missing", err
+	}
+	if _, statErr := os.Stat(filepath.Join(s.routingRulesDir(), "releases", revision, "resources.json")); os.IsNotExist(statErr) {
+		return resource, "missing", err
+	}
+	manifest, manifestErr := s.readRoutingResourceManifest(revision)
+	if manifestErr == nil {
+		if _, ok := manifest.Resources[id]; !ok {
+			return resource, "missing", err
+		}
+		if _, statErr := os.Stat(s.routingRawPath(revision, id)); os.IsNotExist(statErr) {
+			return resource, "missing", err
+		}
+	}
+	return resource, "corrupt", err
+}
+
+// This is a pure cache read. Metadata alone is not evidence that the inspected
+// upstream bytes still exist or retain the checksum used by a comparison.
+func (s *server) routingUpstreamResourceHealth(revision, id string) (routingUpstreamResourceStatus, string, error) {
+	status := s.readRoutingUpstreamResourceStatus(revision, id)
+	if status.Resource.SHA256 == "" {
+		if status.LastError != "" {
+			return status, "error", fmt.Errorf("%s", status.LastError)
+		}
+		return status, "unchecked", nil
+	}
+	content, err := routingReadBoundedFile(s.routingUpstreamPath(revision, id+".yaml"), routingRuleMaxBytes)
+	if err != nil || int64(len(content)) != status.Resource.Bytes || routingSHA256(content) != status.Resource.SHA256 {
+		return status, "corrupt", fmt.Errorf("上游检查缓存原始文件缺失或摘要不一致，请重新查看上游详情")
+	}
+	return status, "verified", nil
 }
 
 func (s *server) inspectRoutingUpstreamRule(ctx context.Context, id, revision string) (routingRuleResource, []string, routingUpstreamResourceStatus, error) {
@@ -504,13 +605,14 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 	var entries []string
 	lastError, checkedAt := state.LastError, state.CheckedAt
 	localError := ""
+	localHealth := "missing"
 	mirrored := false
 	if source == "upstream" {
 		var inspected routingUpstreamResourceStatus
 		var err error
 		resource, entries, inspected, err = s.inspectRoutingUpstreamRule(r.Context(), id, requestedRevision)
 		if err != nil {
-			writeJSON(w, 502, map[string]any{"error": err.Error(), "source": source, "id": id, "checked_at": inspected.CheckedAt, "last_error": inspected.LastError})
+			writeJSON(w, 502, map[string]any{"error": err.Error(), "source": source, "id": id, "checked_at": inspected.CheckedAt, "last_error": inspected.LastError, "verified": false, "health": "error", "can_compare": false})
 			return
 		}
 		lastError, checkedAt = inspected.LastError, inspected.CheckedAt
@@ -524,7 +626,7 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 			revision = snapshot.Revision
 		}
 		var err error
-		resource, err = s.routingPublishedResource(revision, id)
+		resource, localHealth, err = s.routingLocalResourceHealth(snapshot, revision, id)
 		if err == nil {
 			entries, err = parseRoutingRuleYAML(rule, resource.Content)
 			if err != nil {
@@ -538,7 +640,7 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 			entries = doc.Entries
 			localError = err.Error()
 		} else {
-			writeJSON(w, 404, map[string]string{"error": "本地规则尚未同步，请显式同步 MetaCubeX 本地规则"})
+			writeJSON(w, 404, map[string]any{"error": "本地规则尚未同步，请显式同步 MetaCubeX 本地规则", "verified": false, "health": localHealth, "can_compare": false, "local_url": s.routingRawResourceURL(revision, id), "revision": revision})
 			return
 		}
 	}
@@ -548,16 +650,26 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 	if source == "upstream" {
 		upstreamRevision = resource.Revision
 	}
-	upstreamFile := s.readRoutingUpstreamResourceStatus(upstreamRevision, id)
+	upstreamFile, upstreamHealth, upstreamErr := s.routingUpstreamResourceHealth(upstreamRevision, id)
 	localDoc := snapshot.Rules[id]
 	localRevision, localSHA := snapshot.Revision, localDoc.SHA256
 	localVerified := mirrored
 	if source == "local" {
 		localRevision, localSHA = resource.Revision, resource.SHA256
-	} else if local, err := s.routingPublishedResource(snapshot.Revision, id); err == nil && local.SHA256 == localSHA {
-		localVerified = true
+	} else {
+		_, localHealth, _ = s.routingLocalResourceHealth(snapshot, snapshot.Revision, id)
+		localVerified = localHealth == "verified"
 	}
-	hashComparable := localVerified && localSHA != "" && upstreamFile.Resource.SHA256 != ""
+	upstreamVerified := upstreamHealth == "verified"
+	hashComparable := localVerified && upstreamVerified && localSHA != "" && upstreamFile.Resource.SHA256 != ""
+	verified, health := localVerified, localHealth
+	if source == "upstream" {
+		verified, health = upstreamVerified, upstreamHealth
+	}
+	upstreamError := upstreamFile.LastError
+	if upstreamErr != nil {
+		upstreamError = upstreamErr.Error()
+	}
 	updatedAt := resource.DownloadedAt
 	if updatedAt == "" && source == "local" && resource.Revision == snapshot.Revision {
 		updatedAt = snapshot.UpdatedAt
@@ -567,10 +679,12 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 		"behavior": resource.Behavior, "format": resource.Format, "entries": shown,
 		"count": count, "total_count": len(entries), "page": page, "page_size": pageSize, "q": query,
 		"truncated": (page-1)*pageSize+len(shown) < count, "sha256": resource.SHA256, "bytes": resource.Bytes,
-		"source_url": resource.SourceURL, "local_url": resource.LocalURL, "updated_at": updatedAt,
+		"source_url": resource.SourceURL, "local_url": s.routingRawResourceURL(resource.Revision, id), "updated_at": updatedAt,
 		"checked_at": checkedAt, "last_error": lastError, "stale": lastError != "", "mirrored": mirrored,
 		"local_error": localError, "local_revision": localRevision, "upstream_revision": upstreamRevision, "local_mirrored": localVerified,
 		"hash_comparable": hashComparable, "hash_equal": hashComparable && localSHA == upstreamFile.Resource.SHA256,
+		"verified": verified, "health": health, "can_compare": hashComparable,
+		"local_verified": localVerified, "local_health": localHealth, "upstream_verified": upstreamVerified, "upstream_health": upstreamHealth, "upstream_error": upstreamError,
 		"local_sha256": localSHA, "upstream_sha256": upstreamFile.Resource.SHA256,
 	}
 	writeJSON(w, 200, result)
@@ -578,12 +692,17 @@ func (s *server) routingRuleDetailsHandler(w http.ResponseWriter, r *http.Reques
 
 func (s *server) routingResourceCatalogResponse() map[string]any {
 	state, snapshot, err := s.readRoutingRuleState()
+	publishedRevision := snapshot.Revision
+	if publishedRevision == "" && routingRevisionPattern.MatchString(state.Revision) {
+		publishedRevision = state.Revision
+	}
 	if err != nil {
 		state.LastError = err.Error()
 	}
 	upstream := s.readRoutingUpstreamStatus()
 	items := make([]map[string]any, 0, len(routingRuleCatalog()))
 	mirrored, cached := 0, 0
+	healthCounts := map[string]int{}
 	var rawBytes int64
 	for _, rule := range routingRuleCatalog() {
 		encoded, _ := json.Marshal(rule)
@@ -591,12 +710,21 @@ func (s *server) routingResourceCatalogResponse() map[string]any {
 		_ = json.Unmarshal(encoded, &item)
 		doc := snapshot.Rules[rule.ID]
 		item["cached"], item["count"], item["sha256"] = len(doc.Entries) > 0, len(doc.Entries), doc.SHA256
-		item["mirrored"], item["local_url"], item["bytes"] = false, "", int64(0)
-		item["pinned_source_url"], item["downloaded_at"] = doc.SourceURL, doc.DownloadedAt
+		item["mirrored"], item["local_url"], item["bytes"] = false, s.routingRawResourceURL(publishedRevision, rule.ID), int64(0)
+		pinnedURL := doc.SourceURL
+		if pinnedURL == "" && routingRevisionPattern.MatchString(publishedRevision) {
+			pinnedURL = routingPinnedURL(rule, publishedRevision)
+		}
+		item["pinned_source_url"], item["downloaded_at"] = pinnedURL, doc.DownloadedAt
+		resource, health, readErr := s.routingLocalResourceHealth(snapshot, snapshot.Revision, rule.ID)
+		if err != nil {
+			health, readErr = "corrupt", err
+		}
+		item["health"], item["verified"] = health, health == "verified"
+		healthCounts[health]++
 		if len(doc.Entries) > 0 {
 			cached++
-			resource, readErr := s.routingPublishedResource(snapshot.Revision, rule.ID)
-			if readErr == nil && resource.SHA256 == doc.SHA256 {
+			if readErr == nil {
 				mirrored++
 				rawBytes += resource.Bytes
 				item["mirrored"], item["local_url"], item["bytes"] = true, resource.LocalURL, resource.Bytes
@@ -615,29 +743,74 @@ func (s *server) routingResourceCatalogResponse() map[string]any {
 		if checkRevision == "" {
 			checkRevision = snapshot.Revision
 		}
-		checked := s.readRoutingUpstreamResourceStatus(checkRevision, rule.ID)
+		checked, upstreamHealth, upstreamErr := s.routingUpstreamResourceHealth(checkRevision, rule.ID)
 		item["upstream_revision"], item["upstream_checked_at"], item["upstream_error"] = checked.Resource.Revision, checked.CheckedAt, checked.LastError
+		if upstreamErr != nil {
+			item["upstream_error"] = upstreamErr.Error()
+		}
+		item["upstream_verified"], item["upstream_health"] = upstreamHealth == "verified", upstreamHealth
 		item["upstream_bytes"], item["upstream_sha256"] = checked.Resource.Bytes, checked.Resource.SHA256
-		item["hash_comparable"] = item["mirrored"] == true && doc.SHA256 != "" && checked.Resource.SHA256 != ""
-		item["hash_equal"] = item["mirrored"] == true && doc.SHA256 != "" && doc.SHA256 == checked.Resource.SHA256
+		item["hash_comparable"] = item["mirrored"] == true && upstreamHealth == "verified" && doc.SHA256 != "" && checked.Resource.SHA256 != ""
+		item["can_compare"] = item["hash_comparable"]
+		item["hash_equal"] = item["hash_comparable"] == true && doc.SHA256 == checked.Resource.SHA256
 		items = append(items, item)
 	}
-	var diskBytes int64
-	_ = filepath.WalkDir(s.routingRulesDir(), func(_ string, entry fs.DirEntry, err error) error {
-		if err == nil && entry.Type().IsRegular() {
-			if info, infoErr := entry.Info(); infoErr == nil {
-				diskBytes += info.Size()
-			}
-		}
-		return nil
-	})
-	return map[string]any{"rules": items, "total": len(items), "cached_count": cached, "mirrored_count": mirrored,
-		"revision": snapshot.Revision, "updated_at": snapshot.UpdatedAt, "checked_at": state.CheckedAt, "last_error": state.LastError,
+	health := "missing"
+	if err != nil || healthCounts["corrupt"] > 0 {
+		health = "corrupt"
+	} else if healthCounts["legacy_only"] > 0 {
+		health = "legacy_only"
+	} else if mirrored == len(items) {
+		health = "verified"
+	}
+	result := map[string]any{"rules": items, "total": len(items), "cached_count": cached, "mirrored_count": mirrored,
+		"revision": publishedRevision, "updated_at": snapshot.UpdatedAt, "checked_at": state.CheckedAt, "last_error": state.LastError,
 		"stale": routingPublicSnapshot(state, snapshot, nil).Stale, "upstream_revision": upstream.Revision,
 		"upstream_checked_at": upstream.CheckedAt, "upstream_error": upstream.LastError,
 		"update_available": upstream.Revision != "" && snapshot.Revision != "" && upstream.Revision != snapshot.Revision,
-		"disk_bytes":       diskBytes, "raw_bytes": rawBytes, "complete": mirrored == len(items),
+		"raw_bytes":        rawBytes, "complete": mirrored == len(items), "verified": mirrored == len(items), "health": health, "health_counts": healthCounts,
 		"repository": "https://github.com/MetaCubeX/meta-rules-dat", "license_url": "https://github.com/MetaCubeX/meta-rules-dat/blob/master/LICENSE"}
+	for key, value := range s.routingDiskUsage() {
+		result[key] = value
+	}
+	return result
+}
+
+func (s *server) routingDiskUsage() map[string]any {
+	var bytes int64
+	files := 0
+	warnings := []string{}
+	err := filepath.WalkDir(s.routingRulesDir(), func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			bytes += info.Size()
+			files++
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		warnings = append(warnings, "部分规则文件的磁盘占用无法统计")
+	}
+	if bytes >= 1<<30 {
+		warnings = append(warnings, "规则历史和检查缓存已超过 1 GiB；请检查磁盘容量，系统不会自动删除已交付版本")
+	}
+	result := map[string]any{"disk_bytes": bytes, "disk_files": files, "disk_warning_threshold_bytes": int64(1 << 30), "auto_cleanup": false}
+	if free, total, err := routingFilesystemSpace(s.dataDir); err == nil {
+		result["disk_free_bytes"], result["disk_capacity_bytes"] = free, total
+		if free < 1<<30 || total > 0 && free < total/10 {
+			warnings = append(warnings, "数据磁盘剩余空间低于 1 GiB 或 10%，请及时扩容或人工检查")
+		}
+	} else {
+		warnings = append(warnings, "数据磁盘容量暂时无法读取")
+	}
+	result["disk_warning"], result["disk_warnings"] = strings.Join(warnings, "；"), warnings
+	return result
 }
 
 func (s *server) syncRoutingRules(ctx context.Context) (routingRuleSnapshot, error) {
@@ -684,4 +857,282 @@ func (s *server) routingRulesScheduler(ctx context.Context) {
 			timer.Reset(delay)
 		}
 	}
+}
+
+// A damaged manifest is recoverable only from snapshots whose file names still
+// match their complete JSON hash. Do not infer original bytes from a damaged raw
+// file or from the current contents of a moving upstream branch.
+func (s *server) routingTrustedSnapshot(revision string) (routingDiskSnapshot, error) {
+	result := routingDiskSnapshot{Revision: revision, Rules: map[string]routingRuleDocument{}}
+	if !routingRevisionPattern.MatchString(revision) {
+		return result, fmt.Errorf("版本无效")
+	}
+	dir := filepath.Join(s.routingRulesDir(), "releases", revision)
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return result, err
+	}
+	var candidates []fs.FileInfo
+	for _, file := range files {
+		if !file.Type().IsRegular() || !routingHashPattern.MatchString(strings.TrimSuffix(file.Name(), ".json")) || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		info, err := file.Info()
+		if err != nil {
+			return result, err
+		}
+		candidates = append(candidates, info)
+	}
+	if len(candidates) == 0 {
+		return result, os.ErrNotExist
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ModTime().After(candidates[j].ModTime()) })
+	index := routingRuleIndex()
+	var inspected int64
+	for _, file := range candidates {
+		inspected += file.Size()
+		if inspected > 4*routingSnapshotMaxBytes {
+			return result, fmt.Errorf("恢复快照读取超过 256 MiB 限制")
+		}
+		content, err := routingReadBoundedFile(filepath.Join(dir, file.Name()), routingSnapshotMaxBytes)
+		var snapshot routingDiskSnapshot
+		if err != nil || routingSHA256(content)+".json" != file.Name() || json.Unmarshal(content, &snapshot) != nil || snapshot.Revision != revision || len(snapshot.Rules) == 0 || len(snapshot.Rules) > len(index) {
+			continue
+		}
+		valid := true
+		for id, doc := range snapshot.Rules {
+			rule, ok := index[id]
+			if !ok || !routingHashPattern.MatchString(doc.SHA256) || doc.SourceURL != routingPinnedURL(rule, revision) || len(doc.Entries) < 1 || len(doc.Entries) > routingRuleMaxEntries || doc.RawBytes < 0 || doc.RawBytes > routingRuleMaxBytes {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		for id, doc := range snapshot.Rules {
+			old, exists := result.Rules[id]
+			if exists && old.SHA256 != doc.SHA256 {
+				return result, fmt.Errorf("%s 的历史固定版本摘要冲突，不能自动修复", id)
+			}
+			if !exists || old.RawBytes == 0 && doc.RawBytes > 0 {
+				result.Rules[id] = doc
+			}
+		}
+		if snapshot.UpdatedAt > result.UpdatedAt {
+			result.UpdatedAt = snapshot.UpdatedAt
+		}
+		if len(result.Rules) == len(index) {
+			break
+		}
+	}
+	if len(result.Rules) == 0 {
+		return result, fmt.Errorf("没有通过内容摘要校验的本地快照，不能安全修复固定资源")
+	}
+	return result, nil
+}
+
+func (s *server) registerRoutingResourceMaintenanceRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/routing/rules/repair", s.auth(s.routingRuleRepairHandler))
+	mux.HandleFunc("GET /api/routing/rules/versions", s.auth(s.routingRuleVersionsHandler))
+}
+
+// Repair uses an explicitly known immutable commit. It intentionally never
+// checks the branch API and never moves the current pointer to another commit.
+func (s *server) repairRoutingRuleResources(ctx context.Context, revision string) (routingRuleSnapshot, error) {
+	s.routingRuleMu.Lock()
+	defer s.routingRuleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return routingRuleSnapshot{}, err
+	}
+	state, current, readErr := s.readRoutingRuleState()
+	if revision == "" {
+		if readErr != nil {
+			return routingRuleSnapshot{}, readErr
+		}
+		revision = current.Revision
+	}
+	if !routingRevisionPattern.MatchString(revision) {
+		return routingRuleSnapshot{}, routingErrNoRepairVersion
+	}
+	trusted, err := s.routingTrustedSnapshot(revision)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return routingRuleSnapshot{}, fmt.Errorf("该版本没有可信恢复快照: %w", routingErrNoRepairVersion)
+		}
+		return routingRuleSnapshot{}, fmt.Errorf("该版本没有可信恢复快照: %w", err)
+	}
+	manifest, manifestErr := s.readRoutingResourceManifest(revision)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	candidate := routingDiskSnapshot{Revision: revision, UpdatedAt: now, Rules: map[string]routingRuleDocument{}}
+	rawFiles := map[string][]byte{}
+	var rawBytes int64
+	ids := make([]string, 0, len(routingRuleCatalog()))
+	for _, rule := range routingRuleCatalog() {
+		if err := ctx.Err(); err != nil {
+			return routingRuleSnapshot{}, err
+		}
+		ids = append(ids, rule.ID)
+		old := trusted.Rules[rule.ID]
+		expected := old.SHA256
+		if meta, exists := manifest.Resources[rule.ID]; manifestErr == nil && exists {
+			if expected != "" && expected != meta.SHA256 {
+				return routingRuleSnapshot{}, fmt.Errorf("%s 的快照与已发布摘要冲突，拒绝修复", rule.ID)
+			}
+			expected = meta.SHA256
+		}
+		raw, rawErr := routingReadBoundedFile(s.routingRawPath(revision, rule.ID), routingRuleMaxBytes)
+		if expected == "" || rawErr != nil || routingSHA256(raw) != expected {
+			raw, err = s.routingSourceFetch(ctx, routingPinnedURL(rule, revision), routingRuleMaxBytes)
+			if err != nil {
+				return routingRuleSnapshot{}, fmt.Errorf("%s 修复下载失败: %w", rule.Name, err)
+			}
+			if expected != "" && routingSHA256(raw) != expected {
+				return routingRuleSnapshot{}, fmt.Errorf("%s 与历史原始摘要不一致，拒绝改写固定地址", rule.Name)
+			}
+			rawFiles[rule.ID] = raw
+		}
+		entries, err := parseRoutingRuleYAML(rule, raw)
+		if err != nil {
+			return routingRuleSnapshot{}, fmt.Errorf("%s 修复内容无效: %w", rule.Name, err)
+		}
+		if old.SHA256 != "" && !reflect.DeepEqual(old.Entries, entries) {
+			return routingRuleSnapshot{}, fmt.Errorf("%s 原始文件与可信快照条目不一致，拒绝修复", rule.Name)
+		}
+		rawBytes += int64(len(raw))
+		if rawBytes > routingRawSnapshotMaxBytes {
+			return routingRuleSnapshot{}, fmt.Errorf("原始规则候选总量超过 64 MiB 限制")
+		}
+		downloaded := old.DownloadedAt
+		if downloaded == "" {
+			downloaded = now
+		}
+		candidate.Rules[rule.ID] = routingRuleDocument{Entries: entries, SHA256: routingSHA256(raw), SourceURL: routingPinnedURL(rule, revision), RawBytes: int64(len(raw)), DownloadedAt: downloaded}
+	}
+	var created []string
+	published := false
+	defer func() {
+		if !published {
+			s.cleanupRoutingCandidatePaths(revision, created)
+		}
+	}()
+	for id, raw := range rawFiles {
+		path := s.routingRawPath(revision, id)
+		if _, err := os.Stat(path); os.IsNotExist(err) && !s.routingPreviouslyKnownResource(revision, id) {
+			created = append(created, path)
+		}
+		if err := s.writeRoutingRawDocument(revision, id, raw); err != nil {
+			return routingRuleSnapshot{}, err
+		}
+	}
+	base := trusted
+	if revision == current.Revision {
+		base = current
+	}
+	if reflect.DeepEqual(candidate.Rules, base.Rules) {
+		candidate.UpdatedAt = base.UpdatedAt
+	}
+	content, err := json.Marshal(candidate)
+	if err != nil || len(content) > routingSnapshotMaxBytes {
+		return routingRuleSnapshot{}, fmt.Errorf("修复快照超过大小限制")
+	}
+	hash := routingSHA256(content)
+	path := filepath.Join(s.routingRulesDir(), "releases", revision, hash+".json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		created = append(created, path)
+	}
+	if err := routingRulesAtomicWrite(path, content); err != nil {
+		return routingRuleSnapshot{}, err
+	}
+	if err := s.publishRoutingResourceManifest(candidate); err != nil {
+		return routingRuleSnapshot{}, err
+	}
+	published = true
+	if revision == current.Revision {
+		state.Snapshot, state.UpdatedAt = hash, candidate.UpdatedAt
+		if err := s.saveRoutingRuleState(state); err != nil {
+			return routingRuleSnapshot{}, err
+		}
+	}
+	return routingPublicSnapshot(state, candidate, ids), nil
+}
+
+func (s *server) routingRuleRepairHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "仅支持 POST"})
+		return
+	}
+	var request struct {
+		Revision string `json:"revision"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(&request)
+	if err != nil && err != io.EOF || request.Revision != "" && !routingRevisionPattern.MatchString(request.Revision) {
+		writeJSON(w, 400, map[string]string{"error": "修复参数无效，revision 须为固定提交 SHA"})
+		return
+	}
+	if err == nil && decoder.Decode(new(any)) != io.EOF {
+		writeJSON(w, 400, map[string]string{"error": "只允许单个 JSON 请求"})
+		return
+	}
+	snapshot, err := s.repairRoutingRuleResources(r.Context(), request.Revision)
+	result := s.routingCatalogResponse()
+	result["ok"], result["repaired_revision"] = err == nil, snapshot.Revision
+	result["upstream_checked"] = false
+	status := 200
+	if err != nil {
+		status = 502
+		if errors.Is(err, routingErrNoRepairVersion) {
+			status = 409
+		}
+		result["error"] = err.Error()
+	}
+	writeJSON(w, status, result)
+}
+
+func (s *server) routingRuleVersionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, 405, map[string]string{"error": "仅支持 GET"})
+		return
+	}
+	_, page, size, err := routingDetailsPagination(r)
+	if err != nil || size > 50 && r.URL.Query().Get("page_size") != "" {
+		writeJSON(w, 400, map[string]string{"error": "版本分页参数无效，每页最多 50 项"})
+		return
+	}
+	if size > 50 {
+		size = 20
+	}
+	state, _, _ := s.readRoutingRuleState()
+	files, err := os.ReadDir(filepath.Join(s.routingRulesDir(), "releases"))
+	if err != nil && !os.IsNotExist(err) {
+		writeJSON(w, 503, map[string]string{"error": "版本目录读取失败"})
+		return
+	}
+	var revisions []string
+	for _, file := range files {
+		if file.IsDir() && routingRevisionPattern.MatchString(file.Name()) {
+			revisions = append(revisions, file.Name())
+		}
+	}
+	sort.Strings(revisions)
+	start := min((page-1)*size, len(revisions))
+	end := min(start+size, len(revisions))
+	items := make([]map[string]any, 0, end-start)
+	for _, revision := range revisions[start:end] {
+		manifest, err := s.readRoutingResourceManifest(revision)
+		item := map[string]any{"revision": revision, "current": revision == state.Revision, "manifest_valid": err == nil, "resource_count": len(manifest.Resources), "total": len(routingRuleCatalog()), "updated_at": manifest.UpdatedAt, "verified": false, "health": "unchecked"}
+		if err != nil {
+			health := "corrupt"
+			if os.IsNotExist(err) {
+				health = "missing"
+			}
+			item["health"], item["error"] = health, err.Error()
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, 200, map[string]any{"versions": items, "count": len(revisions), "page": page, "page_size": size, "current_revision": state.Revision, "note": "历史列表仅读取清单元信息；原始文件完整性由详情或显式修复验证。不会自动删除已交付版本。"})
 }

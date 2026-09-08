@@ -205,3 +205,42 @@ func TestLegacyTemplateSourceOnlyChangesMappedRuleURLs(t *testing.T) {
 		t.Fatal("derived template falsely offers upstream equivalent")
 	}
 }
+
+func TestLegacyDetailValidatesServedBytesAndAssociatedGeo(t *testing.T) {
+	for _, part := range []string{"binary", "geo"} {
+		t.Run(part, func(t *testing.T) {
+			s, _ := legacyFixture(t)
+			manifest, err := s.retainLegacyResources()
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := "mihomo/domain/Google.mrs"
+			target := path
+			if part == "geo" {
+				target = "_sources/geo/" + readableSource(path)
+			}
+			filename := filepath.Join(s.legacyResourceDir(manifest.Status.ReleaseID), filepath.FromSlash(target))
+			before, err := os.ReadFile(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			corrupt := []byte(strings.Repeat("x", len(before))) // Equal size must still fail SHA verification.
+			if err = os.WriteFile(filename, corrupt, 0644); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("GET", "/api/resources/666os/details?path="+path+"&source=local", nil)
+			out := httptest.NewRecorder()
+			s.legacyResourceDetails(out, req)
+			var result map[string]any
+			if err = json.Unmarshal(out.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if part == "binary" && (result["cached"] != false || result["local_url"] != nil || result["local_error"] == nil) {
+				t.Fatalf("corrupt binary shown ready: %v", result)
+			}
+			if part == "geo" && (result["cached"] != true || result["readable"] != false || result["readable_error"] == nil) {
+				t.Fatalf("corrupt associated geo shown readable: %v", result)
+			}
+		})
+	}
+}

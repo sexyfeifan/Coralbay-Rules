@@ -22,6 +22,7 @@ type subscriptionRequest struct {
 	Target      string `json:"target"`
 	URL         string `json:"url"`
 	Config      string `json:"config"`
+	RuleSource  string `json:"rule_source,omitempty"`
 	Filename    string `json:"filename"`
 	Include     string `json:"include"`
 	Exclude     string `json:"exclude"`
@@ -98,6 +99,9 @@ func validateRegexOption(label, value string) error {
 }
 
 func subscriptionParams(body subscriptionRequest) (url.Values, error) {
+	if body.RuleSource != "" && body.RuleSource != "local" && body.RuleSource != "upstream" {
+		return nil, fmt.Errorf("分流规则来源无效")
+	}
 	if !allowedTargets[body.Target] {
 		return nil, fmt.Errorf("转换目标无效")
 	}
@@ -132,6 +136,9 @@ func subscriptionParams(body subscriptionRequest) (url.Values, error) {
 		return nil, fmt.Errorf("Surge 版本无效")
 	}
 	p := url.Values{"target": {body.Target}, "url": {body.URL}}
+	if body.RuleSource != "" {
+		p.Set("rule_source", body.RuleSource)
+	}
 	bools := map[string]bool{"emoji": body.Emoji, "sort": body.Sort, "dedup": body.Dedup, "udp": body.UDP, "xudp": body.XUDP, "tfo": body.TFO, "scv": body.SCV, "tls13": body.TLS13, "append_type": body.AppendType, "list": body.ListOnly, "insert": body.Insert, "expand": body.Expand, "new_name": body.NewName, "fdn": body.FilterNodes}
 	for key, value := range bools {
 		p.Set(key, strconv.FormatBool(value))
@@ -172,7 +179,7 @@ func (s *server) createSubscriptionLinkV2(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	content, headers, err := s.convertSubscription(r.Context(), params)
+	content, headers, sourceMetadata, err := s.convertSubscriptionWithMetadata(r.Context(), params)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -203,7 +210,7 @@ func (s *server) createSubscriptionLinkV2(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.audit("subscription-link", "completed", fmt.Sprintf("%s nodes=%d", body.Target, nodes))
-	writeJSON(w, http.StatusOK, map[string]any{"url": link, "node_count": nodes, "content_type": headers.Get("Content-Type"), "validated": true, "history_id": item.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"url": link, "node_count": nodes, "content_type": headers.Get("Content-Type"), "validated": true, "history_id": item.ID, "rule_source_metadata": sourceMetadata})
 }
 
 func (s *server) historyPath() string {

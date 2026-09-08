@@ -112,6 +112,9 @@ func (s *server) egressProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid URL", 400)
 		return
 	}
+	if serveConversionGroups(w, r) {
+		return
+	}
 	req := r.Clone(r.Context())
 	req.RequestURI = ""
 	req.Header = r.Header.Clone()

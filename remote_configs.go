@@ -16,23 +16,62 @@ import (
 )
 
 type remoteConfigPreset struct {
-	ID               string                 `json:"id"`
-	Group            string                 `json:"group"`
-	Name             string                 `json:"name"`
-	OriginalURL      string                 `json:"original_url"`
-	LocalURL         string                 `json:"local_url"`
-	Cached           bool                   `json:"cached"`
-	Bytes            int64                  `json:"bytes,omitempty"`
-	UpdatedAt        time.Time              `json:"updated_at,omitempty"`
-	Error            string                 `json:"error,omitempty"`
-	BuiltIn          bool                   `json:"built_in,omitempty"`
-	RuleDependencies remoteRuleDependencies `json:"rule_dependencies"`
+	ID                string                   `json:"id"`
+	Group             string                   `json:"group"`
+	Name              string                   `json:"name"`
+	OriginalURL       string                   `json:"original_url"`
+	LocalURL          string                   `json:"local_url"`
+	Cached            bool                     `json:"cached"`
+	Bytes             int64                    `json:"bytes,omitempty"`
+	UpdatedAt         time.Time                `json:"updated_at,omitempty"`
+	Error             string                   `json:"error,omitempty"`
+	BuiltIn           bool                     `json:"built_in,omitempty"`
+	RuleDependencies  remoteRuleDependencies   `json:"rule_dependencies"`
+	RuleSourceOptions []subscriptionRuleOption `json:"rule_source_options"`
+	RuleSourceNote    string                   `json:"rule_source_note"`
+	RuleDelivery      string                   `json:"rule_delivery"`
 }
 
 type remoteConfigSource struct {
 	Group string `json:"group"`
 	Name  string `json:"name"`
 	URL   string `json:"url"`
+}
+
+func validateRemoteINI(content []byte) error {
+	if len(content) > 2<<20 {
+		return fmt.Errorf("配置超过 2 MiB，已保留最后有效缓存")
+	}
+	if len(content) < 32 {
+		return fmt.Errorf("配置内容为空或过短")
+	}
+	text := strings.TrimSpace(strings.TrimPrefix(string(content), "\ufeff"))
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(lower, "<") || strings.Contains(lower, "<!doctype html") || strings.Contains(lower, "<html") {
+		return fmt.Errorf("上游返回网页而非配置，已保留最后有效缓存")
+	}
+	section, valid := false, false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			section = strings.EqualFold(line, "[custom]")
+			continue
+		}
+		if !section || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(value) != "" {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "ruleset", "custom_proxy_group", "enable_rule_generator", "clash_rule_base", "surge_rule_base", "loon_rule_base", "include":
+				valid = true
+			}
+		}
+	}
+	if !valid {
+		return fmt.Errorf("未识别到有效的 [custom] 配置，已保留最后有效缓存")
+	}
+	return nil
 }
 
 type remoteConfigSyncResult struct {
@@ -85,6 +124,9 @@ func (s *server) subscriptionPresetItems() []remoteConfigPreset {
 	}
 	for i := range items {
 		items[i].RuleDependencies = s.remotePresetDependencies(items[i])
+		items[i].RuleSourceOptions = s.ordinaryRuleOptions(items[i].BuiltIn)
+		items[i].RuleSourceNote = "生成时读取所选来源，规则内嵌到结果；此设置不改变节点订阅地址。"
+		items[i].RuleDelivery = "inline"
 	}
 	return items
 }
@@ -111,6 +153,9 @@ func (s *server) fetchRemoteConfig(ctx context.Context, source remoteConfigSourc
 	}
 	request.Header.Set("User-Agent", "CoralBay-Rules/"+version)
 	client := safeHTTPClient(18 * time.Second)
+	if s.resourceHTTPClient != nil {
+		client = s.resourceHTTPClient
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -119,18 +164,27 @@ func (s *server) fetchRemoteConfig(ctx context.Context, source remoteConfigSourc
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("上游返回 HTTP %d", response.StatusCode)
 	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	content, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
 	if err != nil {
 		return err
 	}
-	if len(content) < 32 {
-		return fmt.Errorf("配置内容为空或过短")
+	if err = validateRemoteINI(content); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(s.remoteConfigDir(), 0700); err != nil {
 		return err
 	}
-	tmp := s.remoteConfigPath(id) + ".tmp"
-	if err := os.WriteFile(tmp, content, 0644); err != nil {
+	temporary, err := os.CreateTemp(s.remoteConfigDir(), ".config-")
+	if err != nil {
+		return err
+	}
+	tmp := temporary.Name()
+	defer os.Remove(tmp)
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.remoteConfigPath(id)); err != nil {
@@ -141,6 +195,8 @@ func (s *server) fetchRemoteConfig(ctx context.Context, source remoteConfigSourc
 }
 
 func (s *server) refreshRemoteConfigs(ctx context.Context) remoteConfigSyncResult {
+	s.remoteConfigMu.Lock()
+	defer s.remoteConfigMu.Unlock()
 	sources := remoteConfigSources()
 	result := remoteConfigSyncResult{Total: len(sources)}
 	jobs := make(chan remoteConfigSource)

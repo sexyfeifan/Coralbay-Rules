@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -560,6 +561,13 @@ func (s *server) buildRouting(ctx context.Context, spec routingProfileSpec) (rou
 			}
 		}
 	}
+	if delivery.Mode != "provider" {
+		for _, target := range spec.Clients {
+			if target == "stash" {
+				result.Warnings = append(result.Warnings, "Stash 节点按官方字段生成；补充的 Mihomo 校验不代表 Stash 原生运行验收，实际连接仍需在 Stash 验证。")
+			}
+		}
+	}
 	result.Warnings = append(result.Warnings, "已验证配置结构、引用和支持范围；请使用新版 Mihomo 内核或 Stash，并在客户端验证实际连接与规则命中。")
 	return result, nil
 }
@@ -600,7 +608,11 @@ func routingCoreValidate(ctx context.Context, outputs map[string]string, resourc
 			continue
 		}
 		file := filepath.Join(dir, "config.yaml")
-		candidate, providers, err := routingLocalValidationConfig(output, resources, dir)
+		validationOutput, err := routingValidationOutput(output, target)
+		if err != nil {
+			return false, err
+		}
+		candidate, providers, err := routingLocalValidationConfig(validationOutput, resources, dir)
 		if err != nil {
 			return false, err
 		}
@@ -784,13 +796,16 @@ var routingNodeProtocolFields = map[string]string{
 	"vmess":     "uuid alterId cipher network ws-opts h2-opts http-opts grpc-opts reality-opts packet-encoding",
 	"vless":     "uuid flow encryption network ws-opts h2-opts http-opts grpc-opts reality-opts packet-encoding",
 	"trojan":    "password network ws-opts grpc-opts reality-opts",
-	"hysteria2": "password up down obfs obfs-password ports hop-interval",
+	"hysteria2": "password up down obfs obfs-password ports hop-interval fast-open",
 	"tuic":      "uuid password token heartbeat-interval disable-sni reduce-rtt request-timeout udp-relay-mode congestion-controller max-udp-relay-packet-size fast-open max-open-streams",
 	"http":      "username password headers",
 	"socks5":    "username password",
 }
 
 func routingValidateNode(node map[string]any) error {
+	if err := routingNormalizeNodeAliases(node); err != nil {
+		return err
+	}
 	kind, ok := node["type"].(string)
 	fields, supported := routingNodeProtocolFields[kind]
 	if !ok || !supported {
@@ -1130,7 +1145,142 @@ func routingStashNode(node map[string]any) error {
 	if node["type"] == "tuic" && node["token"] != nil {
 		return fmt.Errorf("Stash 输出仅支持使用 uuid/password 的 TUIC v5")
 	}
+	if node["type"] == "tuic" {
+		node["version"] = 5
+	}
+	if node["type"] == "hysteria2" {
+		node["auth"] = node["password"]
+		delete(node, "password")
+		for _, key := range []string{"up", "down"} {
+			if value, ok := node[key]; ok {
+				speed, err := routingHY2Mbps(value)
+				if err != nil {
+					return err
+				}
+				node[key+"-speed"] = speed
+				delete(node, key)
+			}
+		}
+	}
 	return nil
+}
+
+// Keep one Mihomo-shaped internal node model. Native Stash aliases are accepted
+// only for the corresponding protocol, with explicit conflict detection.
+func routingNormalizeNodeAliases(node map[string]any) error {
+	if node["type"] == "hysteria2" {
+		if auth, ok := node["auth"]; ok {
+			value, valid := auth.(string)
+			if !valid || routingHasControl(value) {
+				return fmt.Errorf("Hysteria2 auth 须为有效字符串")
+			}
+			if password, exists := node["password"]; exists && password != value {
+				return fmt.Errorf("Hysteria2 auth 与 password 冲突")
+			}
+			node["password"] = value
+			delete(node, "auth")
+		}
+		for _, key := range []string{"up", "down"} {
+			if alias, ok := node[key+"-speed"]; ok {
+				// Stash speed fields are numeric Mbps, never suffixed unit strings.
+				var speed float64
+				switch value := alias.(type) {
+				case int:
+					speed = float64(value)
+				case int64:
+					speed = float64(value)
+				case float64:
+					speed = value
+				default:
+					return fmt.Errorf("Hysteria2 %s-speed 须为非负数值 Mbps", key)
+				}
+				if math.IsNaN(speed) || math.IsInf(speed, 0) || speed < 0 {
+					return fmt.Errorf("Hysteria2 %s-speed 须为非负数值 Mbps", key)
+				}
+				if canonical, exists := node[key]; exists {
+					other, err := routingHY2Mbps(canonical)
+					if err != nil || other != speed {
+						return fmt.Errorf("Hysteria2 %s-speed 与 %s 冲突", key, key)
+					}
+				} else {
+					node[key] = strconv.FormatFloat(speed, 'f', -1, 64) + " Mbps"
+				}
+				delete(node, key+"-speed")
+			}
+		}
+	}
+	if node["type"] == "tuic" {
+		if value, ok := node["version"]; ok {
+			v, err := routingInteger(value)
+			if err != nil || v != 5 {
+				return fmt.Errorf("原生 TUIC version 仅支持 5")
+			}
+			if _, hasToken := node["token"]; hasToken {
+				return fmt.Errorf("TUIC version 5 不能同时使用 v4 token")
+			}
+			delete(node, "version")
+		}
+	}
+	return nil
+}
+
+func routingHY2Mbps(value any) (float64, error) {
+	if n, err := routingInteger(value); err == nil && n >= 0 {
+		return float64(n), nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return 0, fmt.Errorf("Hysteria2 带宽须为非负 Mbps 或带单位的速率")
+	}
+	parts := regexp.MustCompile(`(?i)^(\d+(?:\.\d+)?)\s*([kmg]?)bps$`).FindStringSubmatch(text)
+	if parts == nil {
+		return 0, fmt.Errorf("Hysteria2 带宽单位无效")
+	}
+	n, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil || math.IsInf(n, 0) {
+		return 0, fmt.Errorf("Hysteria2 带宽值过大")
+	}
+	switch strings.ToLower(parts[2]) {
+	case "":
+		n /= 1e6
+	case "k":
+		n /= 1000
+	case "g":
+		n *= 1000
+	}
+	if math.IsInf(n, 0) {
+		return 0, fmt.Errorf("Hysteria2 带宽值过大")
+	}
+	return n, nil
+}
+
+// Mihomo is a supplemental validator, not a Stash interpreter. Normalize only
+// the disposable validation copy back to Mihomo's fields; delivery stays native.
+func routingValidationOutput(output, target string) (string, error) {
+	if target != "stash" {
+		return output, nil
+	}
+	var cfg map[string]any
+	if yaml.Unmarshal([]byte(output), &cfg) != nil {
+		return "", fmt.Errorf("Stash 配置结构无效")
+	}
+	if nodes, ok := cfg["proxies"].([]any); ok {
+		for _, raw := range nodes {
+			node, ok := raw.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("Stash 节点结构无效")
+			}
+			if err := routingValidateNode(node); err != nil {
+				return "", err
+			}
+			if fingerprint, ok := node["server-cert-fingerprint"]; ok {
+				node["fingerprint"] = fingerprint
+				delete(node, "server-cert-fingerprint")
+			}
+		}
+	}
+	encoded, err := yaml.Marshal(cfg)
+	return string(encoded), err
 }
 
 func routingInteger(value any) (int, error) {

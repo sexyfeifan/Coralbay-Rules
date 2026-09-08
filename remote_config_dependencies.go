@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,6 +34,9 @@ func (s *server) remotePresetDependencies(preset remoteConfigPreset) remoteRuleD
 		path = "/app/templates/subconverter/mihomopro.ini"
 	}
 	content, err := os.ReadFile(path)
+	if err != nil && preset.BuiltIn {
+		content, err = []byte(builtinConversionINI), nil
+	}
 	if err != nil {
 		return remoteRuleDependencies{Status: "unknown", Unknown: 1, Note: "配置尚未读取，无法确认规则依赖；配置文件本机镜像不代表规则全部本地化。", Items: []remoteRuleDependency{}}
 	}
@@ -88,11 +92,17 @@ func (s *server) analyzeRemoteRuleDependencies(content string) remoteRuleDepende
 			continue
 		}
 		item := remoteRuleDependency{URL: parsed.String(), Kind: "external"}
-		if parsed.Scheme == "https" && parsed.Host == s.domain && parsed.RawQuery == "" && parsed.Fragment == "" && strings.HasPrefix(parsed.Path, "/_converted/") && !strings.Contains(parsed.Path, "..") {
+		if parsed.Scheme == "https" && parsed.Host == s.domain && parsed.RawQuery == "" && parsed.Fragment == "" {
+			known, available := s.managedRuleDependency(parsed.Path)
+			if !known {
+				item.Kind = "unknown"
+				result.Unknown++
+				result.Items = append(result.Items, item)
+				continue
+			}
 			item.Kind = "local"
 			result.Local++
-			data, err := os.ReadFile(filepath.Join(s.dataDir, "current", filepath.FromSlash(strings.TrimPrefix(parsed.Path, "/"))))
-			item.Available = err == nil && len(legacyEntries(data)) > 0
+			item.Available = available
 			if !item.Available {
 				result.Missing++
 			}
@@ -121,4 +131,66 @@ func (s *server) analyzeRemoteRuleDependencies(content string) remoteRuleDepende
 		result.Note += " 存在未同步或零条目规则，不可视为完整本机覆盖。"
 	}
 	return result
+}
+
+func (s *server) managedRuleDependency(path string) (bool, bool) {
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") || filepath.ToSlash(filepath.Clean(path)) != path {
+		return false, false
+	}
+	resource := strings.TrimPrefix(path, "/")
+	if strings.HasPrefix(resource, "_rule-resources/metacubex/") {
+		revision, file, ok := strings.Cut(strings.TrimPrefix(resource, "_rule-resources/metacubex/"), "/")
+		id := strings.TrimSuffix(file, ".yaml")
+		if !ok || !routingRevisionPattern.MatchString(revision) || file != id+".yaml" {
+			return false, false
+		}
+		if _, exists := routingRuleIndex()[id]; !exists {
+			return false, false
+		}
+		manifest, err := s.readRoutingResourceManifest(revision)
+		if err != nil {
+			return true, false
+		}
+		meta, exists := manifest.Resources[id]
+		if !exists {
+			return true, false
+		}
+		_, err = s.readRoutingRawDocument(revision, id, routingRuleDocument{SourceURL: meta.SourceURL, SHA256: meta.SHA256, RawBytes: meta.Bytes})
+		return true, err == nil
+	}
+	if strings.HasPrefix(resource, "_rule-resources/666os/") {
+		revision, file, ok := strings.Cut(strings.TrimPrefix(resource, "_rule-resources/666os/"), "/")
+		if !ok || !legacyVersionPattern.MatchString(revision) || !legacyKnownPath(file) {
+			return false, false
+		}
+		data, err := routingReadBoundedFile(filepath.Join(s.legacyResourceDir(revision), "manifest.json"), 2<<20)
+		var manifest legacyResourceManifest
+		if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.Status.ReleaseID != revision {
+			return true, false
+		}
+		_, err = s.legacyVerifiedResource(manifest, file)
+		return true, err == nil
+	}
+	if legacyKnownPath(resource) {
+		manifest, err := s.retainLegacyResources()
+		if err != nil {
+			return true, false
+		}
+		_, err = s.legacyVerifiedResource(manifest, resource)
+		return true, err == nil
+	}
+	if strings.HasPrefix(resource, "_converted/") {
+		data, err := routingReadBoundedFile(filepath.Join(s.dataDir, "current", filepath.FromSlash(resource)), legacyResourceMaxBytes)
+		return true, err == nil && len(legacyEntries(data)) > 0
+	}
+	// These are published native resources too, not third-party dependencies.
+	if (strings.HasPrefix(resource, "surge/") && strings.HasSuffix(resource, ".txt")) || (strings.HasPrefix(resource, "singbox/") && (strings.HasSuffix(resource, ".json") || strings.HasSuffix(resource, ".srs"))) {
+		data, err := routingReadBoundedFile(filepath.Join(s.dataDir, "current", filepath.FromSlash(resource)), legacyResourceMaxBytes)
+		available := err == nil && len(data) > 0
+		if strings.HasSuffix(resource, ".txt") {
+			available = available && len(legacyEntries(data)) > 0
+		}
+		return true, available
+	}
+	return false, false
 }

@@ -57,6 +57,7 @@ func legacyKnownPath(path string) bool {
 func (s *server) registerLegacyResourceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources/666os/details", s.auth(s.legacyResourceDetails))
 	mux.HandleFunc("POST /api/resources/666os/check", s.auth(s.legacyResourceCheck))
+	mux.HandleFunc("GET /api/resources/666os/mihomopro", s.auth(s.mihomoProSourceOptions))
 	mux.HandleFunc("GET /_rule-resources/666os/{revision}/{file...}", s.legacyResourceFile)
 	mux.HandleFunc("GET /_rule-templates/666os/{revision}/{source}/{client}", s.legacyResourceTemplate)
 }
@@ -95,12 +96,18 @@ func (s *server) retainLegacyResources() (legacyResourceManifest, error) {
 		var saved legacyResourceManifest
 		if json.Unmarshal(content, &saved) == nil && saved.Status.ReleaseID == status.ReleaseID {
 			for _, path := range legacyResourcePaths() {
-				meta, ok := saved.Files[path]
-				data, err := os.ReadFile(filepath.Join(destination, filepath.FromSlash(path)))
-				digest := sha256.Sum256(data)
-				if !ok || err != nil || int64(len(data)) != meta.Bytes || hex.EncodeToString(digest[:]) != meta.SHA256 {
+				if _, ok := saved.Files[path]; !ok {
 					return saved, fmt.Errorf("本地固定资源缺失或摘要不一致：%s", path)
 				}
+			}
+			// Associated geo and templates carry the same integrity guarantee.
+			for path := range saved.Files {
+				if _, err := s.legacyVerifiedResource(saved, path); err != nil {
+					return saved, fmt.Errorf("本地固定资源缺失或摘要不一致：%s", path)
+				}
+			}
+			if err := s.retainMihomoProInputs(root, &saved); err != nil {
+				return saved, err
 			}
 			return saved, nil
 		}
@@ -134,6 +141,7 @@ func (s *server) retainLegacyResources() (legacyResourceManifest, error) {
 	for _, client := range []string{"clash", "mihomo", "openclash", "stash"} {
 		paths = append(paths, "_templates/clients/"+client+".gotmpl")
 	}
+	paths = append(paths, mihomoProInputPaths...)
 	for i, path := range paths {
 		from := filepath.Join(root, filepath.FromSlash(path))
 		info, err := os.Lstat(from)
@@ -394,7 +402,7 @@ func (s *server) legacyResourceDetails(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "规则或来源无效"})
 		return
 	}
-	root, status, localErr := s.legacyCurrent()
+	_, status, localErr := s.legacyCurrent()
 	behavior := "domain"
 	if strings.Contains(path, "/ip/") {
 		behavior = "ipcidr"
@@ -402,22 +410,35 @@ func (s *server) legacyResourceDetails(w http.ResponseWriter, r *http.Request) {
 	result := map[string]any{"source": source, "path": path, "name": strings.TrimSuffix(filepath.Base(path), ".mrs"), "format": "mrs", "behavior": behavior, "revision": status.Commit, "geo_revision": status.GeoCommit, "updated_at": status.SyncedAt, "content_kind": "metadata", "readable": false, "cached": false, "entries": []string{}, "total": 0, "page": 1, "page_size": 200}
 	var content, readable []byte
 	readPath := readableSource(path)
-	if localErr == nil {
-		content, _ = os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
-		if readPath != "" {
-			readable, _ = os.ReadFile(filepath.Join(root, "_sources", "geo", filepath.FromSlash(readPath)))
-		}
-	}
-	localContent, localReadable := content, readable
 	result["url"] = "https://" + s.domain + "/" + path
-	if manifest, err := s.legacyReadManifest(status.ReleaseID); err == nil {
-		if _, ok := manifest.Files[path]; ok {
+	if localErr == nil {
+		manifest, manifestErr := s.legacyReadManifest(status.ReleaseID)
+		if os.IsNotExist(manifestErr) {
+			manifest, manifestErr = s.retainLegacyResources()
+		}
+		if manifestErr == nil {
+			content, localErr = s.legacyVerifiedResource(manifest, path)
+			if readPath != "" {
+				var readableErr error
+				readable, readableErr = s.legacyVerifiedResource(manifest, "_sources/geo/"+readPath)
+				if readableErr != nil {
+					result["readable_error"] = readableErr.Error()
+				}
+			}
+		} else {
+			localErr = manifestErr
+		}
+		if localErr == nil {
 			result["local_url"] = "https://" + s.domain + "/_rule-resources/666os/" + status.ReleaseID + "/" + path
 			if source == "local" {
 				result["url"] = result["local_url"]
 			}
 		}
 	}
+	if localErr != nil {
+		result["local_error"] = "本地副本校验失败：" + localErr.Error()
+	}
+	localContent, localReadable := content, readable
 	if source != "local" {
 		state := s.legacyReadUpstream()
 		if !legacyCommitPattern.MatchString(state.Revision) || !legacyCommitPattern.MatchString(state.GeoRevision) {
@@ -526,9 +547,8 @@ func (s *server) legacyResourceFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(s.legacyResourceDir(revision), filepath.FromSlash(path)))
-	digest := sha256.Sum256(data)
-	if err != nil || hex.EncodeToString(digest[:]) != file.SHA256 {
+	data, err := s.legacyVerifiedResource(manifest, path)
+	if err != nil {
 		http.Error(w, "本地规则文件不可用", 503)
 		return
 	}
@@ -566,6 +586,10 @@ func (s *server) legacyTemplateOptions(client string, manifest legacyResourceMan
 
 func (s *server) legacyResourceTemplate(w http.ResponseWriter, r *http.Request) {
 	revision, source, client := r.PathValue("revision"), r.PathValue("source"), r.PathValue("client")
+	if client == "mihomopro-config" || client == "mihomopro-overwrite" {
+		s.mihomoProSourceFile(w, r)
+		return
+	}
 	if !legacyTemplateSupported(client) || (source != "local" && source != "upstream") {
 		http.NotFound(w, r)
 		return
