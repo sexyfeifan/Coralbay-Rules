@@ -30,7 +30,11 @@ jobs:
           node --check web/app.js
           node --check web/login.js
           node --check web/routing.js
+          node --check web/miaomiaowu.js
+          node --check web/miaomiaowu-rules.js
           node tests/source_ui_test.cjs
+          node tests/miaomiaowu_ui_test.cjs
+          node tests/miaomiaowu_rules_ui_test.cjs
       - name: Resolve version
         id: version
         shell: bash

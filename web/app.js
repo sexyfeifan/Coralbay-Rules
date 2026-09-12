@@ -14,14 +14,15 @@ function connected(ok, error = '') {
   if ($('lastRefresh')) $('lastRefresh').textContent = new Date().toLocaleString('zh-CN', {hour12:false});
 }
 
-const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity','management','routing','sources']);
-let routingModulePromise, consoleToastTimer;
+const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity','management','routing','sources','miaomiaowu']);
+let routingModulePromise, miaomiaowuModulePromise, consoleToastTimer;
 let legacyUIReady=false, legacyDataStarted=false;
 function ensureLegacyData(){if(!legacyUIReady||legacyDataStarted)return;legacyDataStarted=true;refreshAll()}
 function consoleNotice(message){const toast=$('consoleToast');if(!toast)return;toast.textContent=message;toast.classList.remove('hidden');clearTimeout(consoleToastTimer);consoleToastTimer=setTimeout(()=>toast.classList.add('hidden'),6500)}
 function setNavigationOpen(open){const wasOpen=$('consoleNavigation').classList.contains('open');$('consoleNavigation').classList.toggle('open',open);$('navBackdrop').classList.toggle('hidden',!open);$('navToggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('nav-open',open);if(open)$('navClose').focus();else if(wasOpen)$('navToggle').focus()}
-function currentConsolePage(){return location.pathname.replace(/\/$/,'')==='/routing'?(location.hash==='#sources'?'sources':'routing'):location.hash.slice(1)}
+function currentConsolePage(){const path=location.pathname.replace(/\/$/,'');return path==='/miaomiaowu'?'miaomiaowu':path==='/routing'?(location.hash==='#sources'?'sources':'routing'):location.hash.slice(1)}
 async function loadRoutingModule(view){try{if(!routingModulePromise)routingModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/routing.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayRouting);script.onerror=()=>{script.remove();routingModulePromise=null;reject(new Error('分流页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await routingModulePromise;await module.activate(view)}catch(error){consoleNotice(error.message)}}
+async function loadMiaomiaowuModule(){try{if(!miaomiaowuModulePromise)miaomiaowuModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/miaomiaowu.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayMiaomiaowu);script.onerror=()=>{script.remove();miaomiaowuModulePromise=null;reject(new Error('妙妙屋X 页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await miaomiaowuModulePromise;await module.activate()}catch(error){const page=$('miaomiaowuPage');if(page&&!window.CoralBayMiaomiaowu)page.innerHTML='<p class="routing-feedback bad">'+escapeHTML(error.message)+'</p>';consoleNotice(error.message)}}
 function prepareTabs() {
   const groups = {
     overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
@@ -47,13 +48,14 @@ function activateTab(name, options = {}) {
     if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
   });
   document.querySelectorAll('[data-panel]').forEach(panel => panel.classList.toggle('active', panel.dataset.panel === selected));
-  const destination=selected==='routing'?'/routing':selected==='sources'?'/routing#sources':'/#'+selected;
+  const destination=selected==='miaomiaowu'?'/miaomiaowu':selected==='routing'?'/routing':selected==='sources'?'/routing#sources':'/#'+selected;
   if (options.updateHash !== false && location.pathname+location.hash!==destination) history.pushState(null, '', destination);
   if($('navToggle'))setNavigationOpen(false);
   if(selected==='routing'||selected==='sources')loadRoutingModule(selected);
+  if(selected==='miaomiaowu')loadMiaomiaowuModule();
   if(selected==='overwrite')loadMihomoPro();
   if(selected==='management'&&$('manageRouting').classList.contains('active'))loadRoutingModule('management');
-  else if(selected!=='routing'&&selected!=='sources')ensureLegacyData();
+  else if(!['routing','sources','miaomiaowu'].includes(selected))ensureLegacyData();
 }
 
 async function publicStatus() {
@@ -354,7 +356,7 @@ if ($('sync')) {
   $('sync').onclick=async()=>{try{await json('/api/admin/sync',{method:'POST',headers:actionHeaders()});$('message').textContent='同步已启动';setTimeout(()=>{loadAdmin();loadRules();loadTemplates()},1500)}catch(error){if(error.message.includes('令牌'))sessionStorage.removeItem('coralbayActionToken');$('message').textContent=error.message}};
   $('updateApp').onclick=async()=>{if(!confirm('确认拉取最新镜像并重启 CoralBay Rules？页面可能短暂断开。'))return;await json('/api/admin/update',{method:'POST',headers:actionHeaders()});$('message').textContent='更新器已启动，请约一分钟后刷新页面'};
   $('saveInterval').onclick=async()=>{await json('/api/admin/settings',{method:'PUT',headers:actionHeaders({'Content-Type':'application/json'}),body:JSON.stringify({interval_seconds:Number($('interval').value)})});$('message').textContent='同步频率已保存';loadAdmin()};
-  $('refresh').onclick=()=>refreshAll(); $('ruleCard').onclick=()=>{activateTab('rules');requestAnimationFrame(()=>$('ruleSection').scrollIntoView({behavior:'smooth'}))};
+  $('refresh').onclick=()=>currentConsolePage()==='miaomiaowu'?loadMiaomiaowuModule():refreshAll(); $('ruleCard').onclick=()=>{activateTab('rules');requestAnimationFrame(()=>$('ruleSection').scrollIntoView({behavior:'smooth'}))};
   $('clientTemplate').onchange=selectTemplate; $('templateVariant').onchange=selectTemplate; $('copyClientTemplate').onclick=async()=>{await navigator.clipboard.writeText($('copyClientTemplate').dataset.url);$('message').textContent='在线模板链接已复制'};
   document.querySelectorAll('[data-copy-field]').forEach(button=>button.onclick=async()=>{const value=$(button.dataset.copyField).textContent;if(value==='（留空）')return;$('message').textContent='字段已复制';await navigator.clipboard.writeText(value)});
   $('copyPPanelConfig').onclick=async()=>{const selected=templateItems.find(item=>item.id===$('clientTemplate').value);if(!selected)return;const templateURL=$('ppanelTemplateURL').textContent;const content=[`名称: ${selected.ppanel_name}`,`User-Agent: ${selected.user_agent}`,`输出格式: ${selected.output_format}`,`URL Scheme: ${selected.url_scheme||'留空'}`,`模板: ${templateURL}`].join('\n');await navigator.clipboard.writeText(content);$('message').textContent='PPanel 客户端设置已复制'};
@@ -369,7 +371,7 @@ if ($('sync')) {
   $('ruleCheckUpstream').onclick=()=>operate666('check');$('ruleSyncLocal').onclick=()=>operate666('sync');$('ruleRefreshStatus').onclick=async event=>{event.target.disabled=true;try{await loadRules()}catch(error){consoleNotice(error.message)}finally{event.target.disabled=false}};
   installSubscriptionUsage();
   legacyUIReady=true;
-  if(!['routing','sources'].includes(currentConsolePage()))ensureLegacyData();
+  if(!['routing','sources','miaomiaowu'].includes(currentConsolePage()))ensureLegacyData();
 }
 publicStatus();
 

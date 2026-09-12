@@ -1,5 +1,20 @@
 # 更新记录
 
+## 4.15.0 — 2026-09-12
+
+版本标签为 `v4.15.0`，镜像为 `sexyfeifan/coralbay-rules:4.15.0`。发布记录见 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases)，部署与升级分别验收。
+
+### 妙妙屋X 的 YYDS 模板与规则集
+
+- 新增独立 `/miaomiaowu` 子页面，位于“客户端配置 → 妙妙屋X 模板”；提供完整模板与单项规则集两个导入入口，按需加载，不修改已有订阅、PPanel 模板或 MihomoPro 覆写设置。
+- 基于 666OS / YYDS Pro_cn 生成妙妙屋X Clash V3 YAML 模板，保留 33 个 MRS 规则集、17 个业务组以及原序的 28 条 `RULE-SET` 和最后一条 `MATCH`。节点层适配为全球手动、全球自动与故障转移三个组，共 20 组；不复刻原版地区优先策略，节点由妙妙屋X 注入。
+- 为 33 个原始规则集提供按项生成的 `payload` YAML、正文预览、下载和 `rule-providers` 引用片段。生成结果使用 `format: yaml`、`behavior: classical`，可在妙妙屋X“规则集管理”选择“手动维护”，粘贴正文或从文件导入。
+- 大规则集在屏幕上最多预览前 200 条，明确显示预览条数与完整条数；复制和下载保持完整正文，避免十万行规则拖慢页面。
+- 完整模板与规则集各自选择本机镜像或同版本上游源。“本机”指 CoralBay 服务器；规则集选项控制生成时读取哪一份原件，生成的 YAML 仍由 CoralBay 提供。来源或条目切换立即清空旧结果，失败不会保留旧有效下载链接。
+- 模板和规则集均按固定版本交付，规则更新后需重新获取或生成并导入。新增模板目录 `data/rule-templates/miaomiaowu/` 与规则集目录 `data/miaomiaowu/rulesets/`；备份仍须覆盖整个 `data/`，包括依赖的原件和解码缓存。
+
+详细操作与适配边界见[妙妙屋X 使用指南](docs/miaomiaowux.md)，验证结果和备份升级方式见 [4.15.0 发布说明](RELEASE-4.15.0.md)。发布版本不会自动替换用户在妙妙屋X 中已经绑定的模板或已保存的规则集。
+
 ## 4.14.0 — 2026-09-08
 
 本节描述代码变更；版本标签为 `v4.14.0`，镜像为 `sexyfeifan/coralbay-rules:4.14.0`。实际发布状态见 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases)，升级方法见[搭建与升级指南](docs/deployment.md)。发布与线上升级分别验收。

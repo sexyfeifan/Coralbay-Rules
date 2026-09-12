@@ -1,6 +1,6 @@
 # CoralBay Rules 搭建与维护指南
 
-本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定版本。下文固定版本命令以 **`4.14.0`** 为例，执行前核对 Docker Hub 中的对应标签；版本发布不表示现有服务器已经升级。`latest` 指当时已发布的镜像，不保证包含本页所述新功能。
+本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定版本。下文固定版本命令以 **`4.15.0`** 为例，执行前核对 Docker Hub 中的对应标签；版本发布不表示现有服务器已经升级。`latest` 指当时已发布的镜像，不保证包含本页所述新功能。
 
 使用公开镜像安装不需要 Fork 仓库、配置 GitHub Actions Secrets，也不需要安装 PPanel。HTTPS 可使用已有 Nginx、OpenResty 或反代面板；PPanel 是可选的订阅管理集成，不是安装前提或反代服务。
 
@@ -45,7 +45,7 @@ sudo docker info
 )
 ```
 
-### 固定安装 4.14.0
+### 固定安装 4.15.0
 
 使用下面这一组命令替代上面的安装命令，不需要执行两遍：
 
@@ -59,7 +59,7 @@ sudo docker info
     -o "$coralbay_installer"
   test -s "$coralbay_installer"
   bash -n "$coralbay_installer"
-  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.14.0 \
+  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 \
     bash "$coralbay_installer" install
 )
 ```
@@ -159,9 +159,9 @@ sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
 ```
 
 ```bash
-# 先确认 Docker Hub 已提供 4.14.0 标签。
+# 先确认 Docker Hub 已提供 4.15.0 标签。
 sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
-  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.14.0 rules update
+  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 rules update
 ```
 
 `CORALBAY_IMAGE` 也支持已核实的镜像摘要地址。固定应用版本不等于固定整个 Compose 中其他服务的版本；应保留升级前的配置和镜像信息。

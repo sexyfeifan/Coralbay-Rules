@@ -2,9 +2,9 @@
 
 自托管的订阅转换、分流配置与规则镜像平台。提供原始订阅合并、客户端配置生成、固定订阅链接、PPanel 模板，以及相互独立的 **666OS 规则镜像**和 **MetaCubeX 自定义分流**。
 
-**代码版本：4.14.0** · Linux amd64 / arm64 · Docker Compose 部署
+**代码版本：4.15.0** · Linux amd64 / arm64 · Docker Compose 部署
 
-本页描述 4.14.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
+本页描述 4.15.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
 
 [搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [更新记录](CHANGELOG.md)
 
@@ -19,10 +19,13 @@
 | 查看已有链接、停用或恢复、查看拉取记录 | 订阅服务 → 订阅管理 | 普通转换与自定义分流分别管理 |
 | 给 PPanel 配置客户端订阅模板 | 客户端配置 → PPanel 模板 | 供 PPanel 渲染的 `.gotmpl` 模板 |
 | 为 OpenClash 使用 MihomoPro 覆写 | 客户端配置 → MihomoPro 覆写 | 来源与版本匹配的覆写文件、完整配置和预览 |
+| 给妙妙屋X 导入 YYDS 模板或单项规则集 | 客户端配置 → 妙妙屋X 模板 | Clash V3 模板，以及供规则集管理手动导入的 payload YAML |
 | 镜像 666OS 的规则文件、查看和同步可读源 | 规则与配置源 → 666OS 规则资源 | Mihomo、sing-box、Surge 原生产物和转换产物 |
 | 查看新分流规则的内容、版本与上游来源 | 规则与配置源 → MetaCubeX 分流源 | 78 项独立规则目录与同步状态 |
 
 桌面使用分组侧栏，手机使用抽屉。默认登录入口为 `/`；新分流页面为 `/routing`，规则源页面为 `/routing#sources`。原有 hash 页面入口继续有效，`/admin/` 跳转至 `/`。
+
+**妙妙屋X 支持：** 独立页面 `/miaomiaowu` 提供两种入口：完整模板导入妙妙屋X“模板管理”，33 项 YYDS 规则集可按需转换后导入“规则集管理”。模板保留业务分流，节点由妙妙屋X 注入；两个入口分别选择本机镜像或上游源，均使用固定版本。这里的“本机”是 CoralBay 服务器。导入步骤、格式区别和更新方式见[妙妙屋X 使用指南](docs/miaomiaowux.md)，本版变更见 [4.15.0 发布说明](RELEASE-4.15.0.md)。
 
 ## 快速搭建
 
@@ -71,10 +74,10 @@
 sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:latest rules update
 ```
 
-确认 Docker Hub 已提供 4.14.0 标签后，可使用固定版本升级命令：
+确认 Docker Hub 已提供 4.15.0 标签后，可使用固定版本升级命令：
 
 ```bash
-sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.14.0 rules update
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 rules update
 ```
 
 `rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
@@ -267,7 +270,7 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 - Docker 工作流由 `v*` 标签或手动触发。没有同时配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 时，仍执行校验及 Linux amd64 / arm64 构建，但跳过登录和镜像推送；工作流成功不等于镜像已发布。
 - 两项凭据齐全时，工作流会登录并自动推送构建结果。Token 必须有目标仓库写入权限，不要把凭据写进代码或 `.env` 示例。未配置 Actions 发布凭据的仓库，由已认证维护者另外发布镜像并核对标签和摘要。
 - Fork 发布时，修改 `.github/workflows/docker.yml` 中的镜像命名空间，并相应调整安装器默认镜像或通过 `CORALBAY_IMAGE` 指定自己的镜像。
-- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.14.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
+- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.15.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
 - Docker 工作流不会创建 GitHub Release。已认证维护者确认镜像实际发布、标签和摘要正确后，再手动创建正式 Release；控制台通过 GitHub Releases 查询新版本。
 
 本地开发验证：
@@ -282,7 +285,11 @@ bash tests/sync_test.sh
 node --check web/app.js
 node --check web/login.js
 node --check web/routing.js
+node --check web/miaomiaowu.js
+node --check web/miaomiaowu-rules.js
 node tests/source_ui_test.cjs
+node tests/miaomiaowu_ui_test.cjs
+node tests/miaomiaowu_rules_ui_test.cjs
 ```
 
 `sync_test.sh` 需要 Linux 的 `flock`；macOS 上的跳过不能代替 Linux 回归。当前实现与运行边界见各版本记录及[规则来源说明](docs/reference/metacubex-routing-source-notice.md)。
