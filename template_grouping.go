@@ -587,10 +587,24 @@ func templateGroupingFirst(options []any, first string) []any {
 	return result
 }
 
+var templateGroupingCountryIcons = func() map[string]string {
+	icons := make(map[string]string)
+	for _, country := range templateGroupingCountries() {
+		icons[country.Name] = "flags/" + country.Code + ".png"
+	}
+	return icons
+}()
+
 func templateGroupingIcon(name string) string {
 	icons := map[string]string{"广告拦截": "Reject", "网络测试": "Speedtest", "即时通讯": "Telegram_X", "社交平台": "Twitter", "人工智能": "AI", "开发服务": "GitHub", "EMBY": "Emby", "国际媒体": "Streaming", "游戏平台": "Game", "货币平台": "Cryptocurrency_3", "谷歌服务": "Google_Search", "脸书服务": "Facebook", "微软服务": "Microsoft", "苹果服务": "Apple_1", "国外流量": "Global", "国内流量": "China", "漏网之鱼": "Final", "全球自动": "Auto", "全球手动": "Clubhouse", "故障转移": "ULB", "默认出口": "Global", "香港": "Hong_Kong", "台湾": "Taiwan", "日本": "Japan", "美国": "United_States", "新加坡": "Singapore", "韩国": "Korea", "YouTube": "Streaming", "Netflix": "Streaming", "Disney": "Streaming", "Spotify": "Streaming"}
 	if icon, ok := icons[name]; ok {
 		return icon + ".png"
+	}
+	if icon := templateGroupingCountryIcons[name]; icon != "" {
+		return icon
+	}
+	if icon := map[string]string{"亚洲其他": "Asia_Map.png", "欧洲": "Europe_Map.png", "北美其他": "America_Map.png", "南美洲": "LA_Map.png", "大洋洲": "Oceania_Map.png", "非洲": "Africa_Map.png"}[name]; icon != "" {
+		return icon
 	}
 	return "Global.png"
 }
@@ -635,6 +649,14 @@ func applyTemplateGrouping(cfg map[string]any, p templateGroupingProfile, mode, 
 			group["icon"] = "https://" + domain + "/_assets/icons/" + templateGroupingIcon(name)
 		}
 	}
+	regionalOptions := []any{}
+	for _, suffix := range []string{"自动", "均衡", "手动"} {
+		for _, bucket := range buckets {
+			if templateGroupingMode(p, bucket.Code, suffix) {
+				regionalOptions = append(regionalOptions, bucket.Name+suffix)
+			}
+		}
+	}
 	groups := []any{}
 	for _, spec := range []struct{ name, kind string }{{"全球自动", "url-test"}, {"全球手动", "select"}, {"故障转移", "fallback"}} {
 		group := map[string]any{"name": spec.name, "type": spec.kind}
@@ -649,18 +671,21 @@ func applyTemplateGrouping(cfg map[string]any, p templateGroupingProfile, mode, 
 			}
 		}
 		nodes(group, entries)
+		if spec.kind == "select" {
+			// Only the manual selector receives regional groups. The automatic
+			// fallback stays node-only, so it cannot form a cycle via selectors.
+			if mode == "ppanel" {
+				group["proxies"] = append(group["proxies"].([]any), "__CORALBAY_PROXY_NODES__")
+			} else if mode == "mihomo" {
+				group["proxies"] = append(group["proxies"].([]any), actualNodes...)
+			}
+			group["proxies"] = append(group["proxies"].([]any), regionalOptions...)
+		}
 		icon(group, spec.name)
 		groups = append(groups, group)
 	}
 	defaultOptions := []any{"全球自动", "全球手动", "故障转移", "DIRECT"}
-	for _, suffix := range []string{"自动", "均衡", "手动"} {
-		for _, bucket := range buckets {
-			if !templateGroupingMode(p, bucket.Code, suffix) {
-				continue
-			}
-			defaultOptions = append(defaultOptions, bucket.Name+suffix)
-		}
-	}
+	defaultOptions = append(defaultOptions, regionalOptions...)
 	defaultGroup := map[string]any{"name": "默认出口", "type": "select", "proxies": templateGroupingFirst(defaultOptions, p.Default)}
 	icon(defaultGroup, "默认出口")
 	groups = append(groups, defaultGroup)

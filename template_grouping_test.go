@@ -171,6 +171,53 @@ func indexGroupingChoice(options []string, name string) int {
 	return -1
 }
 
+func TestTemplateGroupingGlobalManualIncludesOnlyEnabledRegions(t *testing.T) {
+	p := defaultTemplateGroupingProfile()
+	p.Regions = []string{"de", "vn"}
+	p.Macros = []string{"europe"}
+	p.Modes["de"] = templateGroupingModes{Balance: true}
+	p.Modes["europe"] = templateGroupingModes{Auto: true}
+	p.Modes["other"] = templateGroupingModes{}
+	base := groupingBaseConfig(t)
+	base["proxies"] = []any{map[string]any{"name": "德国01", "type": "ss", "server": "192.0.2.1", "password": "fixture"}}
+	for _, mode := range []string{"miaomiaowu", "ppanel", "mihomo"} {
+		out, err := applyTemplateGrouping(base, p, mode, "rules.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		groups := groupingGroupMap(out)
+		manual := templateGroupingRefs(groups["全球手动"])
+		for _, name := range []string{"全球自动", "故障转移", "德国均衡", "德国手动", "越南自动", "越南均衡", "越南手动", "欧洲自动", "欧洲手动", "其他未识别手动"} {
+			if !templateGroupingHas(manual, name) {
+				t.Fatalf("%s manual selector missing %s", mode, name)
+			}
+		}
+		for _, name := range []string{"德国自动", "欧洲均衡", "亚洲其他手动", "其他未识别自动", "其他未识别均衡", "默认出口"} {
+			if templateGroupingHas(manual, name) {
+				t.Fatalf("%s disabled/cyclic choice included: %s", mode, name)
+			}
+		}
+		marker := map[string]string{"miaomiaowu": "__PROXY_NODES__", "ppanel": "__CORALBAY_PROXY_NODES__", "mihomo": "德国01"}[mode]
+		if indexGroupingChoice(manual, marker) < 0 || indexGroupingChoice(manual, marker) > indexGroupingChoice(manual, "德国均衡") {
+			t.Fatal("manual node choices missing or follow regions", mode, manual)
+		}
+		if groups["故障转移"]["type"] != "fallback" {
+			t.Fatal("fallback converted to a manual selector")
+		}
+		for _, ref := range templateGroupingRefs(groups["故障转移"]) {
+			if groups[ref] != nil {
+				t.Fatal("fallback must remain node-only", ref)
+			}
+		}
+		for _, suffix := range []string{"自动", "均衡", "手动"} {
+			if groups["越南"+suffix]["icon"] != "https://rules.example.com/_assets/icons/flags/vn.png" {
+				t.Fatal("new country icon not applied to all modes")
+			}
+		}
+		templateGroupingAssertGraph(t, out)
+	}
+}
+
 func templateGroupingAssertGraph(t *testing.T, cfg map[string]any) {
 	t.Helper()
 	groups := groupingGroupMap(cfg)

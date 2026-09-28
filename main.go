@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.17.0"
+var version = "4.17.1"
 
 //go:embed web/*
 var webFS embed.FS
@@ -1189,22 +1189,6 @@ func certificateStatus(domain string) map[string]any {
 	return map[string]any{"ok": true, "not_after": cert.NotAfter, "days_remaining": int(time.Until(cert.NotAfter).Hours() / 24), "issuer": cert.Issuer.CommonName}
 }
 
-func (s *server) iconStatus() map[string]any {
-	entries, err := os.ReadDir(filepath.Join(s.dataDir, "current", "_assets", "icons"))
-	count, bytes := 0, int64(0)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".png") {
-				count++
-				if info, e := entry.Info(); e == nil {
-					bytes += info.Size()
-				}
-			}
-		}
-	}
-	return map[string]any{"ok": count == 27, "cached": count, "expected": 27, "bytes": bytes}
-}
-
 func (s *server) addLog(line string) { s.mu.Lock(); defer s.mu.Unlock(); s.addLogLocked(line) }
 func (s *server) addLogLocked(line string) {
 	formatted := time.Now().Format("2006-01-02 15:04:05") + " " + line
@@ -1377,6 +1361,9 @@ func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/" {
 		s.adminPage(w, r)
+		return
+	}
+	if serveBundledIcon(w, r) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/mihomo/") || strings.HasPrefix(r.URL.Path, "/singbox/") || strings.HasPrefix(r.URL.Path, "/surge/") || strings.HasPrefix(r.URL.Path, "/_templates/") || strings.HasPrefix(r.URL.Path, "/_assets/") || strings.HasPrefix(r.URL.Path, "/_converted/") || r.URL.Path == "/_mirror/status.json" {

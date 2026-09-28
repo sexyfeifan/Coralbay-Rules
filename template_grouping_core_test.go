@@ -143,6 +143,21 @@ func TestTemplateGroupingNativeCoreMembership(t *testing.T) {
 			if !ready {
 				t.Fatal("core did not load provider nodes")
 			}
+			if all.Proxies["全球手动"].Type != "Selector" || all.Proxies["故障转移"].Type != "Fallback" {
+				t.Fatal("native manual/fallback group types changed")
+			}
+			for _, bucket := range templateGroupingBuckets(profile) {
+				for _, suffix := range []string{"自动", "均衡", "手动"} {
+					if templateGroupingMode(profile, bucket.Code, suffix) && !templateGroupingHas(all.Proxies["全球手动"].All, bucket.Name+suffix) {
+						t.Error("native selector missing enabled region", bucket.Name+suffix)
+					}
+				}
+			}
+			for _, name := range all.Proxies["故障转移"].All {
+				if !templateGroupingHas(names, name) {
+					t.Error("fallback has a non-node member", name)
+				}
+			}
 			membership := map[string]int{}
 			for group, info := range all.Proxies {
 				if strings.HasSuffix(group, "手动") && group != "全球手动" {
