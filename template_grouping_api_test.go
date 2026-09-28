@@ -228,7 +228,7 @@ func TestGroupingGenerationTargetsAndImmutableDelivery(t *testing.T) {
 		for _, file := range generation.Artifacts {
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, httptest.NewRequest("GET", file.URL, nil))
-			if w.Code != 200 || w.Body.String() != file.Content || !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+			if w.Code != 200 || w.Body.String() != file.Content || !strings.Contains(w.Header().Get("Cache-Control"), "must-revalidate") {
 				t.Fatalf("lost artifact after source cleanup: %d", w.Code)
 			}
 			r := httptest.NewRequest("GET", file.URL, nil)

@@ -18,7 +18,7 @@ import (
 
 // Settings are shared by the three export surfaces; artifacts are content
 // addressed and never rewritten when settings or upstream inputs change.
-const templateGroupingGenerator = "grouping-v1"
+const templateGroupingGenerator = "grouping-v2"
 
 var templateGroupingStoreMu sync.Mutex
 var templateGroupingPublishMu sync.Mutex
@@ -68,6 +68,11 @@ func (s *server) registerTemplateGroupingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/template-grouping/profiles/{scope}", s.auth(s.templateGroupingPutProfile))
 	mux.HandleFunc("POST /api/template-grouping/preview", s.auth(s.templateGroupingPreviewHandler))
 	mux.HandleFunc("POST /api/template-grouping/generate", s.auth(s.templateGroupingGenerateHandler))
+	mux.HandleFunc("GET /api/template-grouping/history", s.auth(s.groupingHistory))
+	mux.HandleFunc("GET /api/template-grouping/history/{id}", s.auth(s.groupingHistoryDetail))
+	mux.HandleFunc("DELETE /api/template-grouping/history/{id}", s.auth(s.groupingHistoryRecycle))
+	mux.HandleFunc("POST /api/template-grouping/history/{id}/restore", s.auth(s.groupingHistoryRecycle))
+	mux.HandleFunc("GET /api/template-grouping/advanced", s.auth(s.groupingAdvancedBaseline))
 	mux.HandleFunc("GET /_grouped-templates/{id}/{file}", s.templateGroupingFileHandler)
 }
 
@@ -127,7 +132,8 @@ func (s *server) templateGroupingProfileResponse(scope string, store templateGro
 	data, _ := json.Marshal(profile)
 	result := map[string]any{"scope": scope, "inherit": inherit, "profile": profile, "defaults": defaultTemplateGroupingProfile(), "catalog": templateGroupingCatalog(), "revision": routingSHA256(data)}
 	if id := store.Scopes[scope].LastGeneration; routingHashPattern.MatchString(id) {
-		if manifest, err := s.templateGroupingReadGeneration(id, false); err == nil {
+		state, stateErr := s.groupingLifecycle(id)
+		if manifest, err := s.templateGroupingReadGeneration(id, false); err == nil && stateErr == nil && state.DeletedAt == "" {
 			result["last_generation"] = manifest
 		}
 	}
@@ -293,6 +299,13 @@ func (s *server) templateGroupingGenerateHandler(w http.ResponseWriter, r *http.
 		writeJSON(w, 422, map[string]string{"error": err.Error()})
 		return
 	}
+	templateGroupingPublishMu.Lock()
+	err = s.groupingTouch(generation.ID)
+	templateGroupingPublishMu.Unlock()
+	if err != nil {
+		writeJSON(w, 409, map[string]string{"error": err.Error()})
+		return
+	}
 	// Track the last successful generation separately from settings: previewing
 	// unsaved settings never silently changes the active shared profile.
 	templateGroupingStoreMu.Lock()
@@ -351,6 +364,13 @@ func (s *server) templateGroupingGenerate(scope, client, source string, profile 
 	templateGroupingPublishMu.Lock()
 	defer templateGroupingPublishMu.Unlock()
 	if existing, err := s.templateGroupingReadGeneration(id, true); err == nil {
+		state, stateErr := s.groupingLifecycle(id)
+		if stateErr != nil {
+			return existing, stateErr
+		}
+		if state.DeletedAt != "" {
+			return existing, fmt.Errorf("此版本在回收站，请先恢复，再重新生成")
+		}
 		return existing, nil
 	} else if !os.IsNotExist(err) {
 		return templateGroupingGeneration{}, err
@@ -598,7 +618,7 @@ func (s *server) templateGroupingReadGeneration(id string, includeContent bool) 
 	if err != nil {
 		return manifest, err
 	}
-	if json.Unmarshal(data, &manifest) != nil || manifest.ID != id || manifest.Generator != templateGroupingGenerator || !templateGroupingTargetValid(manifest.Scope, manifest.Client) || !miaomiaowuSourceValid(manifest.Source) || len(manifest.Artifacts) < 1 || len(manifest.Artifacts) > 2 {
+	if json.Unmarshal(data, &manifest) != nil || manifest.ID != id || !groupingGeneratorKnown(manifest.Generator) || !templateGroupingTargetValid(manifest.Scope, manifest.Client) || !miaomiaowuSourceValid(manifest.Source) || len(manifest.Artifacts) < 1 || len(manifest.Artifacts) > 2 {
 		return manifest, fmt.Errorf("模板版本清单无效")
 	}
 	seen := map[string]bool{}
@@ -631,6 +651,16 @@ func (s *server) templateGroupingFileHandler(w http.ResponseWriter, r *http.Requ
 		http.NotFound(w, r)
 		return
 	}
+	state, stateErr := s.groupingLifecycle(id)
+	if stateErr != nil {
+		http.Error(w, "历史状态不可读取", 503)
+		return
+	}
+	if state.DeletedAt != "" {
+		w.Header().Set("Cache-Control", "no-store")
+		http.Error(w, "模板已移入回收站，请管理员恢复", 410)
+		return
+	}
 	manifest, err := s.templateGroupingReadGeneration(id, true)
 	if errors.Is(err, os.ErrNotExist) {
 		http.NotFound(w, r)
@@ -645,7 +675,7 @@ func (s *server) templateGroupingFileHandler(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Cache-Control", "public, max-age=60, must-revalidate")
 		w.Header().Set("ETag", `"`+artifact.SHA256+`"`)
 		if r.URL.Query().Get("download") == "1" {
 			w.Header().Set("Content-Disposition", `attachment; filename="CoralBay-`+file+`"`)

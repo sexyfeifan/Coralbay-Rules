@@ -11,22 +11,39 @@ import (
 // These profiles change routing choices only. In particular, proxies and
 // proxy-providers are copied without rewriting any connection fields.
 type templateGroupingProfile struct {
-	Name       string                     `json:"name"`
-	Regions    []string                   `json:"regions"`
-	Default    string                     `json:"default"`
-	ShowNodes  bool                       `json:"show_nodes"`
-	Categories []templateGroupingCategory `json:"categories"`
-	Media      []string                   `json:"media"`
-	TestURL    string                     `json:"test_url"`
-	Interval   int                        `json:"interval"`
-	Tolerance  int                        `json:"tolerance"`
-	Strategy   string                     `json:"strategy"`
-	Icons      bool                       `json:"icons"`
-	HideAuto   bool                       `json:"hide_auto"`
-	DNSMode    string                     `json:"dns_mode"`
-	IPv6       string                     `json:"ipv6"`
-	Sniffer    string                     `json:"sniffer"`
-	Overrides  []templateGroupingOverride `json:"overrides"`
+	Name       string                           `json:"name"`
+	Regions    []string                         `json:"regions"`
+	Macros     []string                         `json:"macros"`
+	Modes      map[string]templateGroupingModes `json:"modes"`
+	Default    string                           `json:"default"`
+	ShowNodes  bool                             `json:"show_nodes"`
+	Categories []templateGroupingCategory       `json:"categories"`
+	Media      []string                         `json:"media"`
+	TestURL    string                           `json:"test_url"`
+	Interval   int                              `json:"interval"`
+	Tolerance  int                              `json:"tolerance"`
+	Strategy   string                           `json:"strategy"`
+	Icons      bool                             `json:"icons"`
+	HideAuto   bool                             `json:"hide_auto"`
+	DNSMode    string                           `json:"dns_mode"`
+	IPv6       string                           `json:"ipv6"`
+	Sniffer    string                           `json:"sniffer"`
+	Overrides  []templateGroupingOverride       `json:"overrides"`
+}
+
+// Missing entries retain legacy automatic/balance behavior; manual is always
+// available for an enabled bucket, including the non-removable catch-all.
+type templateGroupingModes struct {
+	Auto    bool `json:"auto"`
+	Balance bool `json:"balance"`
+}
+
+func templateGroupingMode(p templateGroupingProfile, code, suffix string) bool {
+	m, exists := p.Modes[code]
+	if !exists {
+		m = templateGroupingModes{Auto: true, Balance: true}
+	}
+	return suffix == "手动" || suffix == "自动" && m.Auto || suffix == "均衡" && m.Balance
 }
 
 type templateGroupingCategory struct {
@@ -35,7 +52,7 @@ type templateGroupingCategory struct {
 	Default string `json:"default"`
 }
 
-// Overrides promote their target bucket ahead of ordinary country matching.
+// Overrides promote their target bucket within its country or macro tier.
 // Repeated targets are combined; target priority follows first occurrence.
 // The same compiled filters are used by previews and both output renderers.
 type templateGroupingOverride struct {
@@ -231,6 +248,11 @@ func templateGroupingCountries() []templateGroupingCountry {
 func defaultTemplateGroupingProfile() templateGroupingProfile {
 	p := templateGroupingProfile{Name: "CoralBay 全地区分组", Regions: []string{"hk", "tw", "jp", "us", "sg", "kr"}, Default: "全球自动", ShowNodes: true,
 		Media: []string{}, TestURL: "https://cp.cloudflare.com/generate_204", Interval: 300, Tolerance: 50, Strategy: "consistent-hashing", Icons: true, DNSMode: "inherit", IPv6: "inherit", Sniffer: "inherit", Overrides: []templateGroupingOverride{}}
+	p.Macros = []string{}
+	for _, macro := range templateGroupingMacros {
+		p.Macros = append(p.Macros, macro.Code)
+	}
+	p.Modes = map[string]templateGroupingModes{}
 	for _, name := range miaomiaowuBusinessNames {
 		p.Categories = append(p.Categories, templateGroupingCategory{Name: name, Enabled: true, Default: "auto"})
 	}
@@ -267,7 +289,7 @@ func templateGroupingCatalog() map[string]any {
 	}
 	return map[string]any{"regions": countries, "categories": p.Categories, "media": templateGroupingMediaNames, "macros": macros,
 		"strategies": []string{"consistent-hashing", "round-robin", "sticky-sessions"}, "default_options": options,
-		"matching_note": "人工匹配的目标地区优先，按目标首次出现排序；其余按独立地区顺序、大区、未识别分配。多地区名称会显示歧义，每个节点只归属一次。"}
+		"matching_note": "独立地区优先于大区，剩余进入兜底。人工修正在同层提升目标优先级，不让大区抢走独立地区；每个节点只归属一次。"}
 }
 
 func normalizeTemplateGroupingProfile(p templateGroupingProfile) (templateGroupingProfile, error) {
@@ -286,6 +308,34 @@ func normalizeTemplateGroupingProfile(p templateGroupingProfile) (templateGroupi
 		p.Media = append([]string{}, p.Media...)
 	}
 	defaults := defaultTemplateGroupingProfile()
+	if p.Macros == nil {
+		p.Macros = defaults.Macros
+	} else {
+		p.Macros = append([]string{}, p.Macros...)
+	}
+	macroKnown := map[string]bool{}
+	for _, macro := range templateGroupingMacros {
+		macroKnown[macro.Code] = true
+	}
+	macroSeen := map[string]bool{}
+	for _, code := range p.Macros {
+		if !macroKnown[code] || macroSeen[code] {
+			return p, fmt.Errorf("大区无效或重复：%s", code)
+		}
+		macroSeen[code] = true
+	}
+	modes := map[string]templateGroupingModes{}
+	for code, mode := range p.Modes {
+		valid := macroKnown[code] || code == "other"
+		for _, country := range templateGroupingCountries() {
+			valid = valid || country.Code == code
+		}
+		if !valid {
+			return p, fmt.Errorf("分组模式地区无效：%s", code)
+		}
+		modes[code] = mode
+	}
+	p.Modes = modes
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" {
 		p.Name = defaults.Name
@@ -311,8 +361,8 @@ func normalizeTemplateGroupingProfile(p templateGroupingProfile) (templateGroupi
 		}
 		p.Regions[i], seen[code] = code, true
 	}
-	for _, macro := range templateGroupingMacros {
-		seen[macro.Code] = true
+	for _, code := range p.Macros {
+		seen[code] = true
 	}
 	if len(p.Overrides) > 32 {
 		return p, fmt.Errorf("最多配置 32 条地区匹配规则")
@@ -377,6 +427,9 @@ func normalizeTemplateGroupingProfile(p templateGroupingProfile) (templateGroupi
 	choices := []string{"全球自动", "全球手动", "故障转移", "DIRECT", "REJECT", "REJECT-DROP"}
 	for _, bucket := range buckets {
 		for _, suffix := range []string{"自动", "均衡", "手动"} {
+			if !templateGroupingMode(p, bucket.Code, suffix) {
+				continue
+			}
 			choices = append(choices, bucket.Name+suffix)
 		}
 	}
@@ -434,6 +487,9 @@ func templateGroupingBuckets(p templateGroupingProfile) []templateGroupingBucket
 		selected[code] = true
 	}
 	for _, macro := range templateGroupingMacros {
+		if p.Macros != nil && !templateGroupingHas(p.Macros, macro.Code) {
+			continue
+		}
 		patterns := []string{}
 		for _, c := range countries {
 			if c.Continent == macro.Code && !selected[c.Code] {
@@ -454,9 +510,16 @@ func templateGroupingBuckets(p templateGroupingProfile) []templateGroupingBucket
 		}
 		overrides[override.Region] = append(overrides[override.Region], override.Pattern)
 	}
-	// Target buckets explicitly promoted by an override get first claim. This
+	// Target buckets explicitly promoted by an override get first claim within
+	// their tier. This
 	// avoids lookahead expressions that aren't supported by Go's RE2 engine.
 	sort.SliceStable(buckets, func(i, j int) bool {
+		// Country buckets stay ahead of macro overrides. Promotion is limited
+		// to its tier so a macro cannot steal an independently selected country.
+		ci, cj := len(buckets[i].Code) == 2, len(buckets[j].Code) == 2
+		if ci != cj {
+			return ci
+		}
 		pi, oi := priorities[buckets[i].Code]
 		pj, oj := priorities[buckets[j].Code]
 		if oi != oj {
@@ -592,6 +655,9 @@ func applyTemplateGrouping(cfg map[string]any, p templateGroupingProfile, mode, 
 	defaultOptions := []any{"全球自动", "全球手动", "故障转移", "DIRECT"}
 	for _, suffix := range []string{"自动", "均衡", "手动"} {
 		for _, bucket := range buckets {
+			if !templateGroupingMode(p, bucket.Code, suffix) {
+				continue
+			}
 			defaultOptions = append(defaultOptions, bucket.Name+suffix)
 		}
 	}
@@ -600,6 +666,9 @@ func applyTemplateGrouping(cfg map[string]any, p templateGroupingProfile, mode, 
 	groups = append(groups, defaultGroup)
 	for _, bucket := range buckets {
 		for _, spec := range []struct{ suffix, kind string }{{"自动", "url-test"}, {"均衡", "load-balance"}, {"手动", "select"}} {
+			if !templateGroupingMode(p, bucket.Code, spec.suffix) {
+				continue
+			}
 			group := map[string]any{"name": bucket.Name + spec.suffix, "type": spec.kind, "filter": bucket.Filter, "empty-fallback": "REJECT"}
 			if bucket.ExcludeFilter != "" {
 				group["exclude-filter"] = bucket.ExcludeFilter
@@ -653,6 +722,9 @@ func applyTemplateGrouping(cfg map[string]any, p templateGroupingProfile, mode, 
 		}
 		for _, suffix := range []string{"自动", "均衡", "手动"} {
 			for _, bucket := range buckets {
+				if !templateGroupingMode(p, bucket.Code, suffix) {
+					continue
+				}
 				options = append(options, bucket.Name+suffix)
 			}
 		}
@@ -783,6 +855,10 @@ func templateGroupingPreview(p templateGroupingProfile, names []string) (any, er
 		}
 	}
 	nodes := []map[string]any{}
+	countryFilters := map[string]*regexp.Regexp{}
+	for _, c := range templateGroupingCountries() {
+		countryFilters[c.Code] = regexp.MustCompile(c.pattern)
+	}
 	unknown, ambiguous := 0, 0
 	for _, raw := range names {
 		name := strings.TrimSpace(raw)
@@ -817,7 +893,17 @@ func templateGroupingPreview(p templateGroupingProfile, names []string) (any, er
 		if len(matches) > 1 {
 			ambiguous++
 		}
-		nodes = append(nodes, map[string]any{"name": name, "region": bucket.Code, "region_name": bucket.Name, "matches": matches, "ambiguous": len(matches) > 1})
+		reason := "已进入启用地区"
+		if bucket.Code == "other" {
+			reason = "名称未识别"
+			for _, c := range templateGroupingCountries() {
+				if countryFilters[c.Code].MatchString(name) && !templateGroupingHas(p.Macros, c.Continent) {
+					reason = "所属大区未启用"
+					break
+				}
+			}
+		}
+		nodes = append(nodes, map[string]any{"name": name, "region": bucket.Code, "region_name": bucket.Name, "matches": matches, "ambiguous": len(matches) > 1, "reason": reason})
 	}
 	fakeProviders := map[string]any{}
 	for _, media := range p.Media {
@@ -834,7 +920,7 @@ func templateGroupingPreview(p templateGroupingProfile, names []string) (any, er
 	}
 	warnings := []string{"名称识别不能保证真实出口位置；混合地区名称按匹配优先级归属。均衡按连接分配，不会叠加单连接带宽。"}
 	if len(p.Overrides) > 0 {
-		warnings = append(warnings, "人工匹配会提升整个目标地区的优先级；重复目标合并，目标先后按首次出现。请用歧义提示核对中转名称。")
+		warnings = append(warnings, "人工匹配在独立地区或大区同层内提升目标优先级；大区不能抢走独立地区。请用歧义提示核对中转名称。")
 	}
 	if len(nodes) == 0 {
 		warnings = append(warnings, "尚未提供节点名称；分组结构可预览，实际覆盖率将在提供节点后显示。")

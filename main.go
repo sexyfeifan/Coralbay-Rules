@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.16.0"
+var version = "4.17.0"
 
 //go:embed web/*
 var webFS embed.FS

@@ -250,8 +250,19 @@ func TestTemplateGroupingRejectsInvalidProfile(t *testing.T) {
 	for name, change := range map[string]func(*templateGroupingProfile){
 		"duplicate-country": func(p *templateGroupingProfile) { p.Regions = []string{"jp", "jp"} },
 		"unknown-country":   func(p *templateGroupingProfile) { p.Regions = []string{"invalid"} },
-		"cycle-default":     func(p *templateGroupingProfile) { p.Default = "默认出口" },
-		"missing-default":   func(p *templateGroupingProfile) { p.Default = "德国自动" },
+		"unknown-macro":     func(p *templateGroupingProfile) { p.Macros = []string{"invalid"} },
+		"duplicate-macro":   func(p *templateGroupingProfile) { p.Macros = []string{"europe", "europe"} },
+		"invalid-mode":      func(p *templateGroupingProfile) { p.Modes["invalid"] = templateGroupingModes{} },
+		"disabled-default": func(p *templateGroupingProfile) {
+			p.Modes["jp"] = templateGroupingModes{Balance: true}
+			p.Default = "日本自动"
+		},
+		"disabled-macro-override": func(p *templateGroupingProfile) {
+			p.Macros = []string{}
+			p.Overrides = []templateGroupingOverride{{Pattern: "custom", Region: "europe"}}
+		},
+		"cycle-default":   func(p *templateGroupingProfile) { p.Default = "默认出口" },
+		"missing-default": func(p *templateGroupingProfile) { p.Default = "德国自动" },
 		"lookahead": func(p *templateGroupingProfile) {
 			p.Overrides = []templateGroupingOverride{{Pattern: "^(?!JP)", Region: "jp"}}
 		},
@@ -277,5 +288,64 @@ func TestTemplateGroupingRejectsInvalidProfile(t *testing.T) {
 	preview, err := templateGroupingPreview(defaultTemplateGroupingProfile(), nil)
 	if err != nil || preview.(map[string]any)["total"] != 0 {
 		t.Fatal("empty preview should not invent coverage", err)
+	}
+}
+
+func TestTemplateGroupingOptionalMacrosAndModesPreserveNodes(t *testing.T) {
+	p := defaultTemplateGroupingProfile()
+	p.Regions = []string{"jp"}
+	p.Macros = []string{"asia"}
+	p.Modes["jp"] = templateGroupingModes{Balance: true}
+	p.Modes["asia"] = templateGroupingModes{Auto: true}
+	p.Modes["other"] = templateGroupingModes{}
+	p.Overrides = []templateGroupingOverride{{Pattern: "日本|custom", Region: "asia"}}
+	preview, err := templateGroupingPreview(p, []string{"日本01", "越南01", "德国01", "unknown01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := preview.(map[string]any)["nodes"].([]map[string]any)
+	for i, expected := range []string{"jp", "asia", "other", "other"} {
+		if rows[i]["region"] != expected {
+			t.Fatalf("priority or catchall: %+v", rows)
+		}
+	}
+	if rows[2]["reason"] != "所属大区未启用" || rows[3]["reason"] != "名称未识别" {
+		t.Fatal("catchall reasons conflated")
+	}
+	base := groupingBaseConfig(t)
+	out, err := applyTemplateGrouping(base, p, "miaomiaowu", "rules.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := groupingGroupMap(out)
+	for _, name := range []string{"日本自动", "亚洲其他均衡", "欧洲自动", "欧洲均衡", "欧洲手动", "其他未识别自动", "其他未识别均衡"} {
+		if groups[name] != nil {
+			t.Fatalf("disabled group %s generated", name)
+		}
+		for groupName, group := range groups {
+			if templateGroupingHas(templateGroupingRefs(group), name) {
+				t.Fatalf("dangling %s in %s", name, groupName)
+			}
+		}
+	}
+	for _, name := range []string{"日本手动", "日本均衡", "亚洲其他手动", "亚洲其他自动", "其他未识别手动", "全球手动", "全球自动", "故障转移"} {
+		if groups[name] == nil {
+			t.Fatalf("required group %s lost", name)
+		}
+	}
+	templateGroupingAssertGraph(t, out)
+	// Explicit empty arrays mean disabled; absent fields in legacy profiles retain defaults.
+	p.Regions = []string{}
+	p.Macros = []string{}
+	p.Overrides = nil
+	allOther, err := templateGroupingPreview(p, []string{"香港01", "德国01", "未识别01"})
+	if err != nil || allOther.(map[string]any)["unknown"] != 3 {
+		t.Fatal("all-disabled nodes not retained in catchall", err)
+	}
+	p.Macros = nil
+	p.Modes = nil
+	normalized, err := normalizeTemplateGroupingProfile(p)
+	if err != nil || len(normalized.Macros) != 6 || !templateGroupingMode(normalized, "other", "自动") {
+		t.Fatal("legacy defaults changed", err)
 	}
 }

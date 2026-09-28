@@ -2,9 +2,9 @@
 
 自托管的订阅转换、分流配置与规则镜像平台。提供原始订阅合并、客户端配置生成、固定订阅链接、PPanel 模板，以及相互独立的 **666OS 规则镜像**和 **MetaCubeX 自定义分流**。
 
-**代码版本：4.16.0** · Linux amd64 / arm64 · Docker Compose 部署
+**代码版本：4.17.0** · Linux amd64 / arm64 · Docker Compose 部署
 
-本页描述 4.16.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
+本页描述 4.17.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
 
 [搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [更新记录](CHANGELOG.md)
 
@@ -76,10 +76,10 @@
 sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:latest rules update
 ```
 
-确认 Docker Hub 已提供 4.16.0 标签后，可使用固定版本升级命令：
+确认 Docker Hub 已提供 4.17.0 标签后，可使用固定版本升级命令：
 
 ```bash
-sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.16.0 rules update
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.17.0 rules update
 ```
 
 `rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
@@ -272,7 +272,7 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 - Docker 工作流由 `v*` 标签或手动触发。没有同时配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 时，仍执行校验及 Linux amd64 / arm64 构建，但跳过登录和镜像推送；工作流成功不等于镜像已发布。
 - 两项凭据齐全时，工作流会登录并自动推送构建结果。Token 必须有目标仓库写入权限，不要把凭据写进代码或 `.env` 示例。未配置 Actions 发布凭据的仓库，由已认证维护者另外发布镜像并核对标签和摘要。
 - Fork 发布时，修改 `.github/workflows/docker.yml` 中的镜像命名空间，并相应调整安装器默认镜像或通过 `CORALBAY_IMAGE` 指定自己的镜像。
-- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.16.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
+- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.17.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
 - Docker 工作流不会创建 GitHub Release。已认证维护者确认镜像实际发布、标签和摘要正确后，再手动创建正式 Release；控制台通过 GitHub Releases 查询新版本。
 
 本地开发验证：

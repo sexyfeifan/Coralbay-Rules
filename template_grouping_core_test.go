@@ -34,10 +34,19 @@ func TestTemplateGroupingNativeCoreMembership(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := []string{"香港01", "日本01", "美国01", "德国01", "越南01", "加拿大01", "巴西01", "南非01", "澳大利亚01", "未标注01"}
-	profile := defaultTemplateGroupingProfile()
-	profile.Media = []string{"YouTube", "Netflix", "Disney", "Spotify"}
-	for _, strategy := range []string{"consistent-hashing", "round-robin", "sticky-sessions"} {
-		t.Run(strategy, func(t *testing.T) {
+	for _, scenario := range []string{"consistent-hashing", "round-robin", "sticky-sessions", "disabled-macros-modes"} {
+		t.Run(scenario, func(t *testing.T) {
+			profile := defaultTemplateGroupingProfile()
+			profile.Media = []string{"YouTube", "Netflix", "Disney", "Spotify"}
+			strategy := scenario
+			if scenario == "disabled-macros-modes" {
+				strategy = "consistent-hashing"
+				profile.Regions = []string{"jp"}
+				profile.Macros = []string{"asia"}
+				profile.Modes["jp"] = templateGroupingModes{Balance: true}
+				profile.Modes["asia"] = templateGroupingModes{Auto: true}
+				profile.Modes["other"] = templateGroupingModes{}
+			}
 			profile.Strategy = strategy
 			cfg, err := applyTemplateGrouping(base, profile, "mihomo", "rules.example.com")
 			if err != nil {
@@ -155,14 +164,27 @@ func TestTemplateGroupingNativeCoreMembership(t *testing.T) {
 				}
 			}
 			for _, name := range []string{"日本自动", "日本均衡", "日本手动"} {
+				if name == "日本自动" && scenario == "disabled-macros-modes" {
+					continue
+				}
 				if !templateGroupingHas(all.Proxies[name].All, "日本01") {
 					t.Errorf("real native group %s missing Japanese node", name)
 				}
 			}
 			for _, name := range []string{"台湾自动", "台湾均衡", "台湾手动"} {
+				if scenario == "disabled-macros-modes" {
+					continue
+				}
 				members := all.Proxies[name].All
 				if len(members) != 1 || members[0] != "REJECT" {
 					t.Errorf("empty region %s must fail closed, got %v", name, members)
+				}
+			}
+			if scenario == "disabled-macros-modes" {
+				for _, name := range []string{"日本自动", "台湾手动", "欧洲手动", "亚洲其他均衡", "其他未识别自动", "其他未识别均衡"} {
+					if _, exists := all.Proxies[name]; exists {
+						t.Errorf("disabled native group remains: %s", name)
+					}
 				}
 			}
 			var rules struct {
@@ -184,7 +206,7 @@ func TestTemplateGroupingNativeCoreMembership(t *testing.T) {
 			if !read("/proxies/"+url.PathEscape("日本均衡"), &group) || group.Type != "LoadBalance" {
 				t.Fatalf("native balance group type: %s", group.Type)
 			}
-			t.Logf("real core: %s, %d groups/proxies, 33 loaded providers, 10 nodes each in exactly one regional manual group", strategy, len(all.Proxies))
+			t.Logf("real core: %s, %d groups/proxies, 33 loaded providers, 10 nodes each in exactly one regional manual group", scenario, len(all.Proxies))
 		})
 	}
 }

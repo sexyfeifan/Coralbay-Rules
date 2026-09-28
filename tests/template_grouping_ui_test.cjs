@@ -41,7 +41,7 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 const requests=[],copies=[],hosts=new Map([['mm',new Element()],['pp',new Element()],['ow',new Element()]]);
-const sandbox={URL,Object,setTimeout:callback=>setImmediate(callback),window:{},location:{origin:'https://rules.example.com'},document:{getElementById:id=>hosts.get(id)},navigator:{clipboard:{writeText:async text=>copies.push(text)}},fetch:(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}))};
+const sandbox={URL,URLSearchParams,Object,setTimeout:callback=>setImmediate(callback),window:{confirm:()=>true},location:{origin:'https://rules.example.com'},document:{getElementById:id=>hosts.get(id)},navigator:{clipboard:{writeText:async text=>copies.push(text)}},fetch:(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}))};
 vm.createContext(sandbox);
 const source=fs.readFileSync(path.join(__dirname,'../web/template-grouping.js'),'utf8');
 vm.runInContext(source.replace('window.CoralBayTemplateGrouping = {activate};','window.CoralBayTemplateGrouping = {activate}; globalThis.safeForTest=safeArtifactURL;globalThis.diffForTest=contentDifference;'),sandbox);
@@ -144,5 +144,41 @@ const context={host:'mm',client:'clash',source:'local',available:true,baseline:(
   latest().resolve(response({...profileResponse({...profile,name:'新的共用方案'}),revision:'rev2',last_generation:previous}));await refresh;
   assert.equal(ppState.artifacts.length,0,'old output is removed when the inherited profile changes');
   assert.equal(find('pp','copy-content'),null,'old manifest cannot be represented as current settings');
-  console.log('PASS grouping UI: lazy scope loading, save/inheritance, ordering, unsupported clients, source races, invalid URLs, artifact invalidation and preview');
+  const remove=hosts.get('mm').querySelector('[data-region-remove="jp"]');remove.onclick();
+  assert.ok(!state.profile.regions.includes('jp'),'remove chip cancels independent region');
+  const macro=hosts.get('mm').querySelector('[data-grouping-macro="europe"]');macro.checked=false;macro.onchange();
+  assert.equal(state.profile.macros.length,0,'macro switches are saved explicitly, including empty selection');
+  assert.doesNotMatch(field('mm','default').textContent,/欧洲自动/,'disabled macro removed from default choices');
+  const batch=hosts.get('mm').querySelector('[data-mode-batch="auto"][data-on="false"]');batch.onclick();
+  assert.equal(state.profile.modes.hk.auto,false);assert.equal(state.profile.modes.other.auto,false);
+  assert.match(field('mm','default').textContent,/全球自动/,'batch does not disable global auto');
+  assert.doesNotMatch(field('mm','default').textContent,/香港自动/,'disabled auto removed from choices');
+
+  hosts.get('mm').querySelector('[data-grouping-tab="advanced"]').onclick();
+  assert.match(latest().url,/advanced\?scope=miaomiaowu&client=clash/);
+  latest().resolve(response({revision:'actual-base',dns:{enable:false,'enhanced-mode':'fake-ip',ipv6:false},ipv6:false,sniffer:{enable:true}}));await tick();await tick();
+  assert.match(find('mm','advanced-help').textContent,/actual-base/);
+  field('mm','dns_mode').value='redir-host';field('mm','dns_mode').onchange();
+  assert.match(find('mm','advanced-help').textContent,/不会自动开启 DNS/,'DNS mode does not silently enable disabled DNS');
+  assert.match(find('mm','advanced-help').textContent,/redir-host/);
+
+  const historyLoad=find('mm','history-search').onclick();
+  assert.match(latest().url,/history\?scope=miaomiaowu/);
+  const entry={...generated,profile,created_at:'2026-09-28T12:00:00Z',last_generated_at:'2026-09-28T13:00:00Z',generation_count:2};
+  latest().resolve(response({items:[entry],total:1,page:1,page_size:20}));await historyLoad;
+  assert.match(find('mm','history').textContent,/生成 2 次/);
+  const detail=hosts.get('mm').querySelector('[data-history-detail]').onclick();latest().resolve(response(entry));await detail;
+  assert.match(find('mm','history-detail').textContent,/规则版本 rules-rev/);
+  find('mm','history-reuse').onclick();assert.equal(state.dirty,true);assert.equal(state.profile.name,profile.name);
+  assert.equal(state.context.source,'local','reuse does not silently change source');
+  const deletion=hosts.get('mm').querySelector('[data-history-change]').onclick();
+  assert.equal(latest().options.method,'DELETE');latest().resolve(response({ok:true}));await tick();
+  latest().resolve(response({items:[],total:0,page:1,page_size:20}));await deletion;
+  assert.match(find('mm','feedback').textContent,/可在回收站恢复/);
+  const archive=find('mm','history-archive').onclick();assert.match(latest().url,/archived=true/);
+  latest().resolve(response({items:[{...entry,deleted_at:'2026-09-28T14:00:00Z'}],total:1,page:1,page_size:20}));await archive;
+  const restoration=hosts.get('mm').querySelector('[data-history-change]').onclick();
+  assert.match(latest().url,/\/restore$/);assert.equal(latest().options.method,'POST');latest().resolve(response({ok:true}));await tick();
+  latest().resolve(response({items:[],total:0,page:1,page_size:20}));await restoration;
+  console.log('PASS grouping UI: lazy loading, scopes, races, regions/macros, mode switches, actual advanced baseline, history inspection/reuse/recycle/restore');
 })().catch(error=>{console.error(error);process.exitCode=1;});
