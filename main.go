@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "4.15.0"
+var version = "4.16.0"
 
 //go:embed web/*
 var webFS embed.FS
@@ -49,6 +49,7 @@ type server struct {
 	legacyUpstreamMu   sync.Mutex
 	miaomiaowuMu       sync.Mutex
 	miaomiaowuRulesMu  sync.Mutex
+	miaomiaowuClientMu sync.Mutex
 	remoteConfigMu     sync.Mutex
 	mrsDecodeMu        sync.Mutex
 	mrsDecoder         func(context.Context, string, []byte) ([]string, error)
@@ -190,6 +191,7 @@ func main() {
 	s.registerLegacyResourceRoutes(mux)
 	s.registerMiaomiaowuRoutes(mux)
 	s.registerMiaomiaowuRulesetRoutes(mux)
+	s.registerTemplateGroupingRoutes(mux)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
@@ -1353,7 +1355,7 @@ func (s *server) downloadClientTemplate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) publicFiles(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" || r.URL.Path == "/assets/icon.svg" || r.URL.Path == "/assets/routing.js" || r.URL.Path == "/assets/miaomiaowu.js" || r.URL.Path == "/assets/miaomiaowu-rules.js" {
+	if r.URL.Path == "/assets/style.css" || r.URL.Path == "/assets/app.js" || r.URL.Path == "/assets/login.js" || r.URL.Path == "/assets/icon.svg" || r.URL.Path == "/assets/routing.js" || r.URL.Path == "/assets/miaomiaowu.js" || r.URL.Path == "/assets/miaomiaowu-rules.js" || r.URL.Path == "/assets/template-grouping.js" {
 		name := "web/" + strings.TrimPrefix(r.URL.Path, "/assets/")
 		content, err := fs.ReadFile(webFS, name)
 		if err != nil {

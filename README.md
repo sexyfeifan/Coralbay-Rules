@@ -2,9 +2,9 @@
 
 自托管的订阅转换、分流配置与规则镜像平台。提供原始订阅合并、客户端配置生成、固定订阅链接、PPanel 模板，以及相互独立的 **666OS 规则镜像**和 **MetaCubeX 自定义分流**。
 
-**代码版本：4.15.0** · Linux amd64 / arm64 · Docker Compose 部署
+**代码版本：4.16.0** · Linux amd64 / arm64 · Docker Compose 部署
 
-本页描述 4.15.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
+本页描述 4.16.0 的代码能力。可用版本以 [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) 与 Docker Hub 标签为准；发布新版本不会自动升级固定标签的现有服务器。
 
 [搭建与升级指南](docs/deployment.md) · [GitHub Releases](https://github.com/sexyfeifan/Coralbay-Rules/releases) · [Docker Hub](https://hub.docker.com/r/sexyfeifan/coralbay-rules) · [更新记录](CHANGELOG.md)
 
@@ -26,6 +26,8 @@
 桌面使用分组侧栏，手机使用抽屉。默认登录入口为 `/`；新分流页面为 `/routing`，规则源页面为 `/routing#sources`。原有 hash 页面入口继续有效，`/admin/` 跳转至 `/`。
 
 **妙妙屋X 支持：** 独立页面 `/miaomiaowu` 提供两种入口：完整模板导入妙妙屋X“模板管理”，33 项 YYDS 规则集可按需转换后导入“规则集管理”。模板保留业务分流，节点由妙妙屋X 注入；两个入口分别选择本机镜像或上游源，均使用固定版本。这里的“本机”是 CoralBay 服务器。导入步骤、格式区别和更新方式见[妙妙屋X 使用指南](docs/miaomiaowux.md)，本版变更见 [4.15.0 发布说明](RELEASE-4.15.0.md)。
+
+**共用分组设置（4.16.0）：** 妙妙屋X、PPanel 与 MihomoPro 覆写页新增“分组与分流设置”，可以共用或独立保存分类顺序、默认出口、单节点显示、独立地区、大区兜底、测速/均衡和高级选项。支持节点名称归属预览及媒体细分，生成后提供固定版本文件；基础模板旧链接保持不变。Mihomo 系输出先支持这套方案，Surge/Loon 等其他格式仍使用原有适配。详见[共用模板分组指南](docs/template-grouping.md)和 [4.16.0 发布说明](RELEASE-4.16.0.md)。
 
 ## 快速搭建
 
@@ -74,10 +76,10 @@
 sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:latest rules update
 ```
 
-确认 Docker Hub 已提供 4.15.0 标签后，可使用固定版本升级命令：
+确认 Docker Hub 已提供 4.16.0 标签后，可使用固定版本升级命令：
 
 ```bash
-sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 rules update
+sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.16.0 rules update
 ```
 
 `rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
@@ -270,7 +272,7 @@ x-rule-set-ipcidr: &rule-set-ipcidr
 - Docker 工作流由 `v*` 标签或手动触发。没有同时配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 时，仍执行校验及 Linux amd64 / arm64 构建，但跳过登录和镜像推送；工作流成功不等于镜像已发布。
 - 两项凭据齐全时，工作流会登录并自动推送构建结果。Token 必须有目标仓库写入权限，不要把凭据写进代码或 `.env` 示例。未配置 Actions 发布凭据的仓库，由已认证维护者另外发布镜像并核对标签和摘要。
 - Fork 发布时，修改 `.github/workflows/docker.yml` 中的镜像命名空间，并相应调整安装器默认镜像或通过 `CORALBAY_IMAGE` 指定自己的镜像。
-- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.15.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
+- 版本标签必须匹配 Dockerfile 的 `ARG VERSION`，例如`v4.16.0`。工作流支持 Linux amd64 / arm64，并生成 SBOM、provenance 与 OCI 来源标签。
 - Docker 工作流不会创建 GitHub Release。已认证维护者确认镜像实际发布、标签和摘要正确后，再手动创建正式 Release；控制台通过 GitHub Releases 查询新版本。
 
 本地开发验证：

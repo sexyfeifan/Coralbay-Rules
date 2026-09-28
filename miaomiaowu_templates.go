@@ -45,6 +45,7 @@ func (s *server) registerMiaomiaowuRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/templates/miaomiaowu", s.auth(s.miaomiaowuTemplateOptions))
 	mux.HandleFunc("GET /_miaomiaowu/v1/{revision}/{source}/template.yaml", s.miaomiaowuTemplateFile)
+	s.registerMiaomiaowuClientRoutes(mux)
 }
 
 func miaomiaowuSourceValid(source string) bool { return source == "local" || source == "upstream" }
@@ -336,7 +337,11 @@ func (s *server) miaomiaowuConfig(input []byte, resources legacyResourceManifest
 	return append([]byte(header), data...), providerCount, len(adapted), len(rules), nil
 }
 
-func (s *server) miaomiaowuTemplateOptions(w http.ResponseWriter, _ *http.Request) {
+func (s *server) miaomiaowuTemplateOptions(w http.ResponseWriter, r *http.Request) {
+	if client := r.URL.Query().Get("client"); client != "" && client != "clash" {
+		s.miaomiaowuClientOptions(w, r)
+		return
+	}
 	routingPrivate(w)
 	resources, err := s.retainLegacyResources()
 	var manifest miaomiaowuTemplateManifest

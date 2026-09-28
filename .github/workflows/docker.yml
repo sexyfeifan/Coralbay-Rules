@@ -32,9 +32,11 @@ jobs:
           node --check web/routing.js
           node --check web/miaomiaowu.js
           node --check web/miaomiaowu-rules.js
+          node --check web/template-grouping.js
           node tests/source_ui_test.cjs
           node tests/miaomiaowu_ui_test.cjs
           node tests/miaomiaowu_rules_ui_test.cjs
+          node tests/template_grouping_ui_test.cjs
       - name: Resolve version
         id: version
         shell: bash

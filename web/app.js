@@ -15,7 +15,7 @@ function connected(ok, error = '') {
 }
 
 const consoleTabs = new Set(['overview','templates','overwrite','rules','subscription','activity','management','routing','sources','miaomiaowu']);
-let routingModulePromise, miaomiaowuModulePromise, consoleToastTimer;
+let routingModulePromise, miaomiaowuModulePromise, templateGroupingModulePromise, consoleToastTimer;
 let legacyUIReady=false, legacyDataStarted=false;
 function ensureLegacyData(){if(!legacyUIReady||legacyDataStarted)return;legacyDataStarted=true;refreshAll()}
 function consoleNotice(message){const toast=$('consoleToast');if(!toast)return;toast.textContent=message;toast.classList.remove('hidden');clearTimeout(consoleToastTimer);consoleToastTimer=setTimeout(()=>toast.classList.add('hidden'),6500)}
@@ -23,6 +23,22 @@ function setNavigationOpen(open){const wasOpen=$('consoleNavigation').classList.
 function currentConsolePage(){const path=location.pathname.replace(/\/$/,'');return path==='/miaomiaowu'?'miaomiaowu':path==='/routing'?(location.hash==='#sources'?'sources':'routing'):location.hash.slice(1)}
 async function loadRoutingModule(view){try{if(!routingModulePromise)routingModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/routing.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayRouting);script.onerror=()=>{script.remove();routingModulePromise=null;reject(new Error('分流页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await routingModulePromise;await module.activate(view)}catch(error){consoleNotice(error.message)}}
 async function loadMiaomiaowuModule(){try{if(!miaomiaowuModulePromise)miaomiaowuModulePromise=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/miaomiaowu.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayMiaomiaowu);script.onerror=()=>{script.remove();miaomiaowuModulePromise=null;reject(new Error('妙妙屋X 页面模块加载失败，请刷新重试'))};document.body.appendChild(script)});const module=await miaomiaowuModulePromise;await module.activate()}catch(error){const page=$('miaomiaowuPage');if(page&&!window.CoralBayMiaomiaowu)page.innerHTML='<p class="routing-feedback bad">'+escapeHTML(error.message)+'</p>';consoleNotice(error.message)}}
+async function loadTemplateGrouping(scope,context){
+  try{
+    if(!templateGroupingModulePromise)templateGroupingModulePromise=window.CoralBayTemplateGrouping?Promise.resolve(window.CoralBayTemplateGrouping):new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/assets/template-grouping.js?v='+encodeURIComponent(coralbayAssetVersion);script.onload=()=>resolve(window.CoralBayTemplateGrouping);script.onerror=()=>{script.remove();templateGroupingModulePromise=null;reject(new Error('分组设置加载失败，请重新打开此页面'))};document.body.appendChild(script)});
+    const module=await templateGroupingModulePromise;if(!module?.activate)throw new Error('分组设置模块尚未就绪');await module.activate(scope,context);
+  }catch(error){consoleNotice(error.message)}
+}
+function syncTemplateGrouping(scope){
+  const page=scope==='ppanel'?'templates':'overwrite';if(currentConsolePage()!==page)return;
+  const anchor=$(scope==='ppanel'?'clientTemplateHint':'mihomoStatus');if(!anchor)return;
+  const id=scope+'Grouping';let host=$(id);if(!host){host=document.createElement('div');host.id=id;anchor.insertAdjacentElement('afterend',host)}
+  if(scope==='ppanel'){
+    const client=$('clientTemplate').value||'clash',source=ruleSourceValue('templateRuleSource'),item=templateItems.find(value=>value.id===client),option=item?.rule_source_options?.find(value=>value.id===source);
+    loadTemplateGrouping(scope,{host,client,source,original:$('templateVariant').value==='original',available:option?.available,baseline:()=>$('clientTemplatePreview').textContent});
+    const preview=$('clientTemplatePreview').closest('details');if(preview?.querySelector('summary'))preview.querySelector('summary').textContent='基础模板内容（不含上方自定义设置）';
+  }else{const source=ruleSourceValue('mihomoRuleSource'),item=selectedMihomoSource();loadTemplateGrouping(scope,{host,client:'mihomo',source,available:item?.available,baseline:()=>$('mihomoPreviewKind').value==='config'?$('mihomoPreview').textContent:''})}
+}
 function prepareTabs() {
   const groups = {
     overview: ['.hero', '#connectionAlert', '.metric-grid', '#operations'],
@@ -54,6 +70,7 @@ function activateTab(name, options = {}) {
   if(selected==='routing'||selected==='sources')loadRoutingModule(selected);
   if(selected==='miaomiaowu')loadMiaomiaowuModule();
   if(selected==='overwrite')loadMihomoPro();
+  if(selected==='templates'||selected==='overwrite')syncTemplateGrouping(selected==='templates'?'ppanel':'overwrite');
   if(selected==='management'&&$('manageRouting').classList.contains('active'))loadRoutingModule('management');
   else if(!['routing','sources','miaomiaowu'].includes(selected))ensureLegacyData();
 }
@@ -205,7 +222,7 @@ function selectTemplate() {
   const templateURL=blocked?'':ruleSource?.url||(original?selected.original_url:selected.online_url);
   $('templateRuleSourceHint').textContent=blocked?ruleSource?.reason||'所选来源当前不可用；请同步资源，或明确选择现有模板地址。':ruleSource?`实际来源：${ruleSourceName(ruleSource.id)} · 版本：${ruleSource.revision||'未记录'} · ${ruleSource.description||''}`:original?'实际来源：Perfect Panel 原始模板自带规则。':'实际来源：沿用现有模板规则地址；未切换来源。';
   setArtifactLink('downloadClientTemplate',blocked?'':ruleSource?.url||(original?selected.original_download_url:selected.download_url));
-  $('downloadClientTemplate').textContent=original?'下载原始版':'下载改造版';setArtifactLink('openClientTemplate',templateURL);$('openClientTemplate').textContent=original?'打开原始版':'打开改造版';
+  $('downloadClientTemplate').textContent=original?'下载原始版':'下载基础改造版';setArtifactLink('openClientTemplate',templateURL);$('openClientTemplate').textContent=original?'打开原始版':'打开基础改造版';$('copyClientTemplate').textContent=original?'复制原始链接':'复制基础链接';
   $('copyClientTemplate').dataset.url=templateURL;$('copyClientTemplate').disabled=!templateURL;$('copyPPanelConfig').disabled=!templateURL;
   const statusMap={adapted:['adapted','● 已改造'],converted:['converted','◉ 已转换规则源'],convertible:['convertible','◐ 可改造'],'nodes-only':['limited','— 仅节点 / 不适用']};
   const state=statusMap[selected.capability]||['base','○ 官方基础'],status=`<span class="template-status ${state[0]}">${state[1]}</span>`,variantStatus=original?'<span class="template-status base">○ Perfect Panel 原始版</span>':status;
@@ -213,6 +230,7 @@ function selectTemplate() {
   const description=original?'未经 CoralBay 分流改造的 Perfect Panel 原始模板，用于对照、排错或恢复。':ruleSource?`${selected.name} 模板保留节点渲染、策略组和规则顺序；规则从${sourceLabel}下载。`:selected.description;
   $('clientTemplateHint').innerHTML=`${variantStatus}<span>${escapeHTML(description)}<br><small>${original?'节点：官方原始渲染 · 策略组与规则：保持原样':`节点：${selected.node_rendering?'可渲染':'不适用'} · 策略组：${escapeHTML(selected.policy_groups)} · 规则源：${escapeHTML(sourceLabel)} · ${escapeHTML(selected.validation)}`}</small></span>`;
   $('ppanelName').textContent=selected.ppanel_name||'';$('ppanelUA').textContent=selected.user_agent||'';$('ppanelFormat').textContent=selected.output_format||'';$('ppanelScheme').textContent=selected.url_scheme||'（留空）';$('ppanelTemplateURL').textContent=templateURL||'';
+  syncTemplateGrouping('ppanel');
   const requestID=++templatePreviewRequest;if(!templateURL){$('clientTemplatePreview').textContent='来源尚未就绪，当前没有可预览或复制的模板。';return}
   $('clientTemplatePreview').textContent='正在读取模板…';fetch(localArtifactPreviewURL(templateURL),{cache:'no-store'}).then(response=>{if(!response.ok)throw new Error(`HTTP ${response.status}`);return response.text()}).then(content=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=content}).catch(error=>{if(requestID===templatePreviewRequest)$('clientTemplatePreview').textContent=`模板预览失败：${error.message}`});
 }
@@ -228,9 +246,10 @@ function renderMihomoPro(){
   const value=ruleSourceValue('mihomoRuleSource'),options=mihomoCatalog?.source_options||[],item=selectedMihomoSource(),blocked=value!=='legacy'&&(!item||item.available===false);
   renderRuleSourceControl('mihomoRuleSource',{value,options,showLegacy:blocked,reason:'覆写文件与完整配置使用同一来源和固定版本。切换后请重新导入所选覆写文件。',onchange:()=>{renderMihomoPro();previewMihomoPro()}});
   $('mihomoSourceHint').textContent=value==='legacy'?'实际来源：沿用现有模板地址；旧覆写与完整配置保持兼容。':blocked?item?.reason||'此来源尚未就绪；请刷新状态或同步 666OS。':`实际来源：${ruleSourceName(value)} · 版本：${item?.revision||'未记录'} · 规则文件：${item?.provider_count??'—'} 份 · ${item?.description||''}`;
-  $('mihomoArtifacts').innerHTML=[['overwrite','覆写文件'],['config','完整配置']].map(([kind,label])=>{const url=item?.available===false?'':resourceURL(item?.[kind+'_url']);return `<article class="source-artifact"><h3>${label}</h3><code>${escapeHTML(url||item?.reason||'当前来源未就绪')}</code><div class="panel-actions">${url?`<a class="button secondary" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">打开</a><a class="button secondary" href="${escapeHTML(url)}" download>下载</a><button type="button" class="secondary" data-mihomo-copy="${escapeHTML(url)}">复制 URL</button><button type="button" class="secondary" data-mihomo-preview="${kind}">预览</button>`:'<span class="warning">请刷新状态；资源缺失时先同步 666OS。</span>'}</div></article>`}).join('');
+  $('mihomoArtifacts').innerHTML=[['overwrite','基础覆写文件'],['config','基础完整配置']].map(([kind,label])=>{const url=item?.available===false?'':resourceURL(item?.[kind+'_url']);return `<article class="source-artifact"><h3>${label}</h3><p class="field-hint">不含上方自定义分组设置</p><code>${escapeHTML(url||item?.reason||'当前来源未就绪')}</code><div class="panel-actions">${url?`<a class="button secondary" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">打开</a><a class="button secondary" href="${escapeHTML(url)}" download>下载</a><button type="button" class="secondary" data-mihomo-copy="${escapeHTML(url)}">复制 URL</button><button type="button" class="secondary" data-mihomo-preview="${kind}">预览</button>`:'<span class="warning">请刷新状态；资源缺失时先同步 666OS。</span>'}</div></article>`}).join('');
   $('mihomoArtifacts').querySelectorAll('[data-mihomo-copy]').forEach(button=>button.onclick=async()=>{try{await navigator.clipboard.writeText(button.dataset.mihomoCopy);consoleNotice('所选文件 URL 已复制')}catch{consoleNotice('剪贴板不可用，请手动复制文件地址。')}});
   $('mihomoArtifacts').querySelectorAll('[data-mihomo-preview]').forEach(button=>button.onclick=()=>{$('mihomoPreviewKind').value=button.dataset.mihomoPreview;previewMihomoPro()});
+  syncTemplateGrouping('overwrite');
 }
 async function loadMihomoPro(force=false){
   if(mihomoLoading||mihomoCatalog&&!force)return;mihomoLoading=true;$('mihomoRefresh').disabled=true;$('mihomoStatus').textContent='正在读取 MihomoPro 来源状态…';$('mihomoStatus').classList.remove('hidden','bad');
