@@ -1,6 +1,6 @@
 # CoralBay Rules 搭建与维护指南
 
-本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定版本。下文固定版本命令以 **`4.15.0`** 为例，执行前核对 Docker Hub 中的对应标签；版本发布不表示现有服务器已经升级。`latest` 指当时已发布的镜像，不保证包含本页所述新功能。
+本指南适用于 Linux x86_64（amd64）和 ARM64 服务器。应用镜像为 `sexyfeifan/coralbay-rules`；可选择跟随 `latest`，或固定版本。下文固定版本命令以 **`4.17.1`** 为例，执行前核对 Docker Hub 中的对应标签；版本发布不表示现有服务器已经升级。`latest` 指当时已发布的镜像，不保证包含本页所述新功能。
 
 使用公开镜像安装不需要 Fork 仓库、配置 GitHub Actions Secrets，也不需要安装 PPanel。HTTPS 可使用已有 Nginx、OpenResty 或反代面板；PPanel 是可选的订阅管理集成，不是安装前提或反代服务。
 
@@ -45,7 +45,7 @@ sudo docker info
 )
 ```
 
-### 固定安装 4.15.0
+### 固定安装 4.17.1
 
 使用下面这一组命令替代上面的安装命令，不需要执行两遍：
 
@@ -59,7 +59,7 @@ sudo docker info
     -o "$coralbay_installer"
   test -s "$coralbay_installer"
   bash -n "$coralbay_installer"
-  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 \
+  sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.17.1 \
     bash "$coralbay_installer" install
 )
 ```
@@ -159,16 +159,36 @@ sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
 ```
 
 ```bash
-# 先确认 Docker Hub 已提供 4.15.0 标签。
+# 先确认 Docker Hub 已提供 4.17.1 标签。
 sudo env CORALBAY_INSTALL_DIR=/opt/coralbay-rules \
-  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.15.0 rules update
+  CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.17.1 rules update
 ```
 
 `CORALBAY_IMAGE` 也支持已核实的镜像摘要地址。固定应用版本不等于固定整个 Compose 中其他服务的版本；应保留升级前的配置和镜像信息。
 
 已有安装不要用 `install` 代替日常升级。`install` 用于首次安装或有意重新配置域名、端口、同步周期；重新配置会覆盖之前在网页中保存的 666OS 同步周期。若旧安装缺少 `rules` 快捷命令，可按前面的临时文件下载流程取得脚本，将执行的子命令改为 `update`，并用 `CORALBAY_INSTALL_DIR` 指定已有安装目录。
 
-应用或生成器版本变化后，666OS 会重新生成对应版本的产物；不要把这一过程与 MetaCubeX 的独立同步混为一谈。升级后重新检查容器、控制台版本和已有订阅。MetaCubeX 会补齐缺少的原始 YAML，666OS 保存独立固定资源。4.14.0 不批量改写旧链接或模板：旧普通链接缺省 `rule_source` 时保持原签名和旧规则链路；旧自定义方案缺省来源字段时继续内嵌，只有主动编辑、预览并保存才改变交付方式。
+应用或生成器版本变化后，666OS 会重新生成对应版本的产物；不要把这一过程与 MetaCubeX 的独立同步混为一谈。升级后重新检查容器、控制台版本和已有订阅。MetaCubeX 会补齐缺少的原始 YAML，666OS 保存独立固定资源。升级不批量改写旧链接或模板：旧普通链接缺省 `rule_source` 时保持原签名和旧规则链路；旧自定义方案缺省来源字段时继续内嵌，只有主动编辑、预览并保存才改变交付方式。
+
+### 升级后确认版本与使用新模板
+
+先运行 `sudo rules status`，确认应用启动，再检查运行镜像声明的程序版本：
+
+```bash
+sudo docker inspect coralbay-rules \
+  --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+```
+
+升级到本指南的固定版本时应显示 `4.17.1`。再检查公网 HTTPS、控制台版本与规则完整度，以及自己使用的订阅能否正常拉取；`/_mirror/status.json` 的 `generator_version` 是规则产物的生成器版本，需等同步完成，不能单独代替运行程序版本检查。
+
+4.16–4.17.1 增加了共用分组、生成历史、回收站及完整国家图标。要让已导入的模板使用这些变化：
+
+1. 刷新 CoralBay 页面，在目标入口的“分组与分流设置”中选择共用或独立方案，核对地区、默认出口与自动／均衡开关。需要本地图标时开启“使用本机缓存图标”。
+2. 保存方案并生成新版本，从“采用本方案的新文件”区域取得文件；基础模板下载入口不会自动套用这套设置。
+3. PPanel 替换相应客户端模板；妙妙屋X 导入并绑定新模板；MihomoPro 重新导入同一次生成的配对覆写与完整配置。
+4. 在客户端更新订阅或重新加载配置，核对节点、分组、图标、规则下载和实际连接。仅升级服务器不会替换外部平台已保存的模板。
+
+各入口支持范围与历史文件恢复方法见[共用模板分组指南](template-grouping.md)。回收站停用生成文件不会释放磁盘，也不会撤回客户端已经下载的内容；升级备份需包含整个 `data/`，包括 `settings/`、`grouped-templates/` 和 `grouped-history/`。
 
 ### 配置回退不等于服务回退
 

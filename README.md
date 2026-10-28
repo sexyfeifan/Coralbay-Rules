@@ -25,9 +25,9 @@
 
 桌面使用分组侧栏，手机使用抽屉。默认登录入口为 `/`；新分流页面为 `/routing`，规则源页面为 `/routing#sources`。原有 hash 页面入口继续有效，`/admin/` 跳转至 `/`。
 
-**妙妙屋X 支持：** 独立页面 `/miaomiaowu` 提供两种入口：完整模板导入妙妙屋X“模板管理”，33 项 YYDS 规则集可按需转换后导入“规则集管理”。模板保留业务分流，节点由妙妙屋X 注入；两个入口分别选择本机镜像或上游源，均使用固定版本。这里的“本机”是 CoralBay 服务器。导入步骤、格式区别和更新方式见[妙妙屋X 使用指南](docs/miaomiaowux.md)，本版变更见 [4.15.0 发布说明](RELEASE-4.15.0.md)。
+**妙妙屋X 支持：** 独立页面 `/miaomiaowu` 提供两种入口：完整模板导入妙妙屋X“模板管理”，33 项 YYDS 规则集可按需转换后导入“规则集管理”。模板保留业务分流，节点由妙妙屋X 注入；两个入口分别选择本机镜像或上游源，均使用固定版本。这里的“本机”是 CoralBay 服务器。导入步骤、格式区别和更新方式见[妙妙屋X 使用指南](docs/miaomiaowux.md)，该功能初版变更见 [4.15.0 发布说明](RELEASE-4.15.0.md)。
 
-**共用分组设置（4.16.0）：** 妙妙屋X、PPanel 与 MihomoPro 覆写页新增“分组与分流设置”，可以共用或独立保存分类顺序、默认出口、单节点显示、独立地区、大区兜底、测速/均衡和高级选项。支持节点名称归属预览及媒体细分，生成后提供固定版本文件；基础模板旧链接保持不变。Mihomo 系输出先支持这套方案，Surge/Loon 等其他格式仍使用原有适配。详见[共用模板分组指南](docs/template-grouping.md)和 [4.16.0 发布说明](RELEASE-4.16.0.md)。
+**共用分组设置（4.16–4.17.1）：** 妙妙屋X、PPanel 与 MihomoPro 覆写页新增“分组与分流设置”，可以共用或独立保存分类顺序、默认出口、单节点显示、独立地区、大区兜底、测速/均衡和高级选项。支持节点名称归属预览、媒体细分、地区与模式启停、生成历史和回收站；4.17.1 补齐所有可选国家的本机图标，并扩展全球手动候选。生成后提供固定版本文件；基础模板旧链接保持不变。Mihomo 系输出先支持这套方案，Surge/Loon 等其他格式仍使用原有适配。详见[共用模板分组指南](docs/template-grouping.md)和 [4.17.1 发布说明](RELEASE-4.17.1.md)。
 
 ## 快速搭建
 
@@ -39,12 +39,13 @@
 
 ```bash
 (
-  set -eu
+  set -Eeuo pipefail
   coralbay_installer="$(mktemp)"
   trap 'rm -f "$coralbay_installer"' EXIT
   curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
     "https://raw.githubusercontent.com/sexyfeifan/Coralbay-Rules/main/install.sh?t=$(date +%s)" \
     -o "$coralbay_installer"
+  test -s "$coralbay_installer"
   bash -n "$coralbay_installer"
   sudo bash "$coralbay_installer" install
 )
@@ -83,6 +84,8 @@ sudo env CORALBAY_IMAGE=sexyfeifan/coralbay-rules:4.17.1 rules update
 ```
 
 `rules update` 会下载管理脚本并更新 Compose 服务，保留已有密码、密钥和数据。它默认沿用 `.env` 中的镜像设置：如果原来固定了旧版本，单独执行 `rules update` 不会自动切换到新标签，需要像上面一样显式指定 `CORALBAY_IMAGE`。自定义目录、旧快捷命令不可用时的升级方式见[搭建指南](docs/deployment.md)。
+
+升级后先查看 `sudo rules status` 和控制台版本，再检查规则同步与已有订阅。要使用新分组和国旗，请刷新页面、用原方案生成新文件，再替换 PPanel／妙妙屋X 模板或重新导入配对覆写，最后更新客户端订阅。操作与版本核对见[升级后验证步骤](docs/deployment.md#升级后确认版本与使用新模板)。
 
 启动检查失败时会保留或恢复原配置并报错，已拉取的镜像不会自动回退。已有安装日常升级使用 `update`；`install` 用于首次安装或重新配置，重新选择的同步间隔会覆盖网页保存的设置。
 
